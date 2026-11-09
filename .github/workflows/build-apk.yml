@@ -23,6 +23,18 @@ jobs:
           mv pubspec.yaml.bak pubspec.yaml
           rm -rf test
           python3 tools/patch_android.py
+      - name: Force all plugins to compile against Android SDK 36
+        run: |
+          mkdir -p ~/.gradle/init.d
+          cat > ~/.gradle/init.d/compilesdk.gradle <<'GRADLE'
+          allprojects { p ->
+            p.afterEvaluate {
+              if (p.hasProperty('android')) {
+                p.android.compileSdk = 36
+              }
+            }
+          }
+          GRADLE
       - run: flutter pub get
       - run: flutter build apk --release
       - uses: actions/upload-artifact@v4
