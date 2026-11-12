@@ -3,6 +3,8 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+permissions:
+  contents: write   # lets the job publish the APK as a GitHub Release
 jobs:
   apk:
     runs-on: ubuntu-latest
@@ -48,3 +50,13 @@ jobs:
         with:
           name: JO_POS_apk
           path: build/app/outputs/flutter-apk/app-release.apk
+      - name: Publish APK as a release (stable download link)
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp build/app/outputs/flutter-apk/app-release.apk JO_POS.apk
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest JO_POS.apk --target "${{ github.sha }}" \
+            --title "JO POS - latest build" \
+            --notes "Latest APK built from main (${{ github.sha }}). Download JO_POS.apk below and install it on the phone."
