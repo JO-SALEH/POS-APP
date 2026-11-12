@@ -26,6 +26,7 @@ const Map<String, List<String>> _s = {
   'price': ['Price', 'السعر'],
   'save': ['Save', 'حفظ'],
   'cancel': ['Cancel', 'إلغاء'],
+  'ok': ['OK', 'حسنًا'],
   'delete': ['Delete', 'حذف'],
   'confirm': ['Confirm', 'تأكيد'],
   'add': ['Add', 'إضافة'],
@@ -64,6 +65,34 @@ const Map<String, List<String>> _s = {
   'import_hint': [
     'Pick an Excel .xlsx file, the JO PHARMA database file (jo_pharmacy.db), a JO POS backup, CSV or JSON. Columns are found by their names (barcode / name / price, or باركود / الاسم / السعر); without a header the order is barcode, name, price.',
     'اختر ملف Excel بصيغة xlsx، أو ملف قاعدة بيانات JO PHARMA (jo_pharmacy.db)، أو نسخة JO POS، أو CSV أو JSON. الأعمدة تُعرف بأسمائها (باركود / الاسم / السعر)، وبدون عناوين يكون الترتيب: باركود، اسم، سعر.'
+  ],
+  'rep_title_ok': ['Import verified', 'تم الاستيراد والتحقق'],
+  'rep_title_bad': ['Import finished with errors', 'انتهى الاستيراد مع أخطاء'],
+  'rep_rows': ['Rows read from the file', 'الصفوف المقروءة من الملف'],
+  'rep_added': ['New products', 'منتجات جديدة'],
+  'rep_updated': ['Updated (name / price)', 'منتجات تم تحديثها (اسم / سعر)'],
+  'rep_unchanged': ['Already up to date', 'منتجات مطابقة (بدون تغيير)'],
+  'rep_alt_added': ['Extra barcodes saved', 'باركودات إضافية محفوظة'],
+  'rep_skip_code': ['Skipped: no barcode', 'تم تخطيها: بدون باركود'],
+  'rep_skip_name': ['Skipped: no name', 'تم تخطيها: بدون اسم'],
+  'rep_skip_other': ['Skipped: unreadable rows', 'تم تخطيها: صفوف غير مقروءة'],
+  'rep_dups': ['Same barcode twice in the file (last row used)', 'باركود مكرر في الملف (اعتُمد آخر صف)'],
+  'rep_conflicts': ['Extra barcodes refused (belong to another product)', 'باركودات إضافية مرفوضة (تخص منتجًا آخر)'],
+  'rep_sci': ['Barcodes damaged by Excel (1.23E+12)', 'باركودات أفسدها Excel (1.23E+12)'],
+  'rep_mismatch': ['Verification failures', 'أخطاء في التحقق'],
+  'rep_total_products': ['Products in the app now', 'المنتجات في التطبيق الآن'],
+  'rep_total_codes': ['Extra barcodes in the app now', 'الباركودات الإضافية في التطبيق الآن'],
+  'rep_verified': [
+    'Every imported barcode, name and price was read back from the database and matches the file.',
+    'تمت إعادة قراءة كل باركود واسم وسعر من قاعدة البيانات وهي مطابقة للملف.'
+  ],
+  'rep_not_verified': [
+    'Some rows do not match what the file says. Import the file again; if it repeats, send me the notes below.',
+    'بعض الصفوف لا تطابق الملف. أعد الاستيراد، وإن تكرر أرسل لي الملاحظات أدناه.'
+  ],
+  'rep_sci_hint': [
+    'Excel shortened these long barcodes and the last digits are lost. In Excel format the barcode column as Text, retype them, and import again.',
+    'اختصر Excel هذه الباركودات الطويلة وضاعت آخر أرقامها. في Excel اجعل عمود الباركود نصًّا (Text) وأعد كتابتها ثم استورد من جديد.'
   ],
   'import_ok': ['Imported {0} products', 'تم استيراد {0} منتج'],
   'import_empty': [

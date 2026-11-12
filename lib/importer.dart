@@ -1,8 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
+import 'codes.dart';
 import 'db.dart';
 import 'i18n.dart';
 
@@ -14,6 +16,12 @@ class ImportException implements Exception {
   String toString() => message;
 }
 
+/// Products found in a file, before they are written to the database.
+class ParseResult {
+  final List<ImportItem> items = [];
+  int rows = 0, noCode = 0, noName = 0, other = 0, sci = 0;
+}
+
 /// Product import from any file the user picks:
 ///  * Excel .xlsx            (own zip + XML reader: no extra package, tolerant of styles / Arabic / numeric barcodes)
 ///  * JO PHARMA database     (jo_pharmacy.db: table `medications`)  or a JO POS backup (table `products`)
@@ -21,24 +29,36 @@ class ImportException implements Exception {
 /// Columns are found by their header names (English or Arabic); without a header the order is barcode, name, price.
 class Importer {
   // ------------------------------------------------------------------ entry
-  static Future<int> importPath(String path, {required List<Product> Function(String text) parseText}) async {
+  /// Reads the file, imports everything in one transaction and returns the verified report.
+  static Future<ImportReport> importPath(String path, {required ParseResult Function(String text) parseText}) async {
     final f = File(path);
     if (!await f.exists()) throw ImportException(tr('import_empty'));
     final head = await _readHead(f);
     if (_isSqlite(head)) return importSqlite(path);
+    ParseResult pr;
     if (head.length >= 4 && head[0] == 0x50 && head[1] == 0x4B) {
-      final products = fromRows(_readXlsx(await f.readAsBytes()));
-      if (products.isEmpty) throw ImportException(tr('import_empty'));
-      return Db.bulkUpsert(products);
-    }
-    if (head.length >= 4 && head[0] == 0xD0 && head[1] == 0xCF && head[2] == 0x11 && head[3] == 0xE0) {
+      pr = fromRows(rowsFromXlsx(await f.readAsBytes()));
+    } else if (head.length >= 4 && head[0] == 0xD0 && head[1] == 0xCF && head[2] == 0x11 && head[3] == 0xE0) {
       throw ImportException(tr('import_xls'));
+    } else {
+      var text = utf8.decode(await f.readAsBytes(), allowMalformed: true);
+      if (text.startsWith('﻿')) text = text.substring(1);
+      pr = parseText(text);
     }
-    var text = utf8.decode(await f.readAsBytes(), allowMalformed: true);
-    if (text.startsWith('﻿')) text = text.substring(1);
-    final products = parseText(text);
-    if (products.isEmpty) throw ImportException(tr('import_empty'));
-    return Db.bulkUpsert(products);
+    return commit(pr);
+  }
+
+  /// Imports a parsed file; throws when it holds no usable product.
+  static Future<ImportReport> commit(ParseResult pr) async {
+    if (pr.items.isEmpty) throw ImportException(tr('import_empty'));
+    final rep = ImportReport()
+      ..rows = pr.rows
+      ..skippedNoCode = pr.noCode
+      ..skippedNoName = pr.noName
+      ..skippedOther = pr.other
+      ..sciWarnings = pr.sci;
+    if (pr.sci > 0) rep.note('sci: ${pr.sci}');
+    return Db.importBatch(pr.items, into: rep);
   }
 
   static Future<Uint8List> _readHead(File f) async {
@@ -60,49 +80,14 @@ class Importer {
   }
 
   // ------------------------------------------------------------ SQLite file
-  static Future<int> importSqlite(String path) async {
+  static Future<ImportReport> importSqlite(String path) async {
     final dir = await getTemporaryDirectory();
     final copy = File('${dir.path}/jo_import_${DateTime.now().millisecondsSinceEpoch}.db');
     await File(path).copy(copy.path); // always work on a copy: the picked file is never touched
     Database? src;
     try {
       src = await openDatabase(copy.path, singleInstance: false);
-      final tables = (await src.rawQuery("SELECT name FROM sqlite_master WHERE type='table'"))
-          .map((r) => '${r['name']}')
-          .toSet();
-      final out = <Product>[];
-      if (tables.contains('medications')) {
-        final cols = (await src.rawQuery('PRAGMA table_info(medications)')).map((r) => '${r['name']}').toSet();
-        final arCol = cols.contains('name_ar') ? 'name_ar' : "'' AS name_ar";
-        var offset = 0;
-        while (true) {
-          final rows = await src.rawQuery(
-              'SELECT barcode, name, $arCol, price FROM medications ORDER BY id LIMIT 5000 OFFSET ?',
-              [offset]);
-          if (rows.isEmpty) break;
-          for (final r in rows) {
-            final code = '${r['barcode'] ?? ''}'.trim();
-            var name = '${r['name'] ?? ''}'.trim();
-            if (name.isEmpty) name = '${r['name_ar'] ?? ''}'.trim();
-            final price = (r['price'] is num) ? (r['price'] as num).toDouble() : (double.tryParse('${r['price']}') ?? 0);
-            if (code.isNotEmpty && name.isNotEmpty) out.add(Product(barcode: code, name: name, price: price));
-          }
-          offset += rows.length;
-          if (rows.length < 5000) break;
-        }
-      } else if (tables.contains('products')) {
-        final rows = await src.rawQuery('SELECT barcode, name, price FROM products');
-        for (final r in rows) {
-          final code = '${r['barcode'] ?? ''}'.trim();
-          final name = '${r['name'] ?? ''}'.trim();
-          final price = (r['price'] is num) ? (r['price'] as num).toDouble() : 0.0;
-          if (code.isNotEmpty && name.isNotEmpty) out.add(Product(barcode: code, name: name, price: price));
-        }
-      } else {
-        throw ImportException(tr('import_db_unknown'));
-      }
-      if (out.isEmpty) throw ImportException(tr('import_empty'));
-      return Db.bulkUpsert(out);
+      return await commit(await readSqlite(src));
     } on DatabaseException {
       throw ImportException(tr('import_db_unknown'));
     } finally {
@@ -116,6 +101,82 @@ class Importer {
         } catch (_) {}
       }
     }
+  }
+
+  /// JO PHARMA database (medications + item_codes) or a JO POS backup (products + product_codes).
+  @visibleForTesting
+  static Future<ParseResult> readSqlite(Database src) async {
+    final tables = (await src.rawQuery("SELECT name FROM sqlite_master WHERE type='table'"))
+        .map((r) => '${r['name']}')
+        .toSet();
+    final pr = ParseResult();
+    double priceOf(Object? v) => v is num ? v.toDouble() : (double.tryParse('${v ?? ''}'.replaceAll(',', '.')) ?? 0);
+
+    if (tables.contains('medications')) {
+      // every extra barcode of every medicine (desktop table item_codes), in the order they were added
+      final extra = <int, List<String>>{};
+      if (tables.contains('item_codes')) {
+        for (final r in await src.rawQuery('SELECT code, med_id FROM item_codes ORDER BY rowid')) {
+          final id = r['med_id'];
+          final c = Codes.norm('${r['code'] ?? ''}');
+          if (id is int && !Codes.isJunk(c)) (extra[id] ??= []).add(c);
+        }
+      }
+      final cols = (await src.rawQuery('PRAGMA table_info(medications)')).map((r) => '${r['name']}').toSet();
+      final arCol = cols.contains('name_ar') ? 'name_ar' : "'' AS name_ar";
+      var offset = 0;
+      while (true) {
+        final rows = await src.rawQuery(
+            'SELECT id, barcode, name, $arCol, price FROM medications ORDER BY id LIMIT 5000 OFFSET ?', [offset]);
+        if (rows.isEmpty) break;
+        for (final r in rows) {
+          pr.rows++;
+          final id = r['id'];
+          var code = Codes.norm('${r['barcode'] ?? ''}');
+          final alts = [...?(id is int ? extra[id] : null)];
+          if (Codes.isJunk(code) && alts.isNotEmpty) code = alts.removeAt(0); // a medicine known only by its extra codes
+          var name = '${r['name'] ?? ''}'.trim();
+          if (name.isEmpty) name = '${r['name_ar'] ?? ''}'.trim();
+          if (Codes.isJunk(code)) {
+            pr.noCode++;
+            continue;
+          }
+          if (name.isEmpty) {
+            pr.noName++;
+            continue;
+          }
+          pr.items.add(ImportItem(Product(barcode: code, name: name, price: priceOf(r['price'])), alts));
+        }
+        offset += rows.length;
+        if (rows.length < 5000) break;
+      }
+    } else if (tables.contains('products')) {
+      final extra = <int, List<String>>{};
+      if (tables.contains('product_codes')) {
+        for (final r in await src.rawQuery('SELECT code, product_id FROM product_codes ORDER BY rowid')) {
+          final id = r['product_id'];
+          if (id is int) (extra[id] ??= []).add('${r['code']}');
+        }
+      }
+      for (final r in await src.rawQuery('SELECT id, barcode, name, price FROM products')) {
+        pr.rows++;
+        final code = Codes.norm('${r['barcode'] ?? ''}');
+        final name = '${r['name'] ?? ''}'.trim();
+        if (Codes.isJunk(code)) {
+          pr.noCode++;
+          continue;
+        }
+        if (name.isEmpty) {
+          pr.noName++;
+          continue;
+        }
+        final id = r['id'];
+        pr.items.add(ImportItem(Product(barcode: code, name: name, price: priceOf(r['price'])), [...?(id is int ? extra[id] : null)]));
+      }
+    } else {
+      throw ImportException(tr('import_db_unknown'));
+    }
+    return pr;
   }
 
   // ------------------------------------------------------- header detection
@@ -160,23 +221,17 @@ class Importer {
     return bestI;
   }
 
-  static String _cleanCode(String raw) {
-    var s = raw.trim();
-    if (RegExp(r'^\d+\.0+$').hasMatch(s)) return s.substring(0, s.indexOf('.'));
-    if (RegExp(r'^\d+(\.\d+)?[eE][+-]?\d+$').hasMatch(s)) {
-      final d = double.tryParse(s);
-      if (d != null && d.isFinite && d.abs() < 1e18) return d.toStringAsFixed(0);
-    }
-    return s;
-  }
-
   static double? _price(String raw) {
-    final s = raw.trim().replaceAll(',', '.').replaceAll(RegExp(r'[^\d.\-]'), '');
+    final s = Codes.latinDigits(raw).trim().replaceAll(',', '.').replaceAll(RegExp(r'[^\d.\-]'), '');
     return double.tryParse(s);
   }
 
-  static List<Product> fromRows(List<List<String>> rows) {
+  /// Rows of a sheet -> products. Besides the main barcode column, EVERY other column whose header
+  /// looks like a barcode (Barcode 2, باركود 2, ...) and every extra code written in the barcode cell
+  /// ("111, 222") is imported as an extra barcode of the same product.
+  static ParseResult fromRows(List<List<String>> rows) {
     var hRow = -1, cCode = 0, cName = 1, cPrice = 2;
+    final extraCols = <int>[];
     final scan = rows.length < 15 ? rows.length : 15;
     for (var r = 0; r < scan; r++) {
       final taken = <int>{};
@@ -187,34 +242,56 @@ class Importer {
       if (n < 0) continue;
       taken.add(n);
       final p = _best(rows[r], _kPrice, taken);
+      if (p >= 0) taken.add(p);
       hRow = r;
       cCode = c;
       cName = n;
       cPrice = p; // -1 when the file has no price column: price 0, can be edited later
+      for (var i = 0; i < rows[r].length; i++) {
+        if (!taken.contains(i) && _score(rows[r][i], _kBarcode) > 0) extraCols.add(i);
+      }
       break;
     }
-    final out = <Product>[];
+    final pr = ParseResult();
     for (var r = hRow + 1; r < rows.length; r++) {
       final row = rows[r];
       String at(int i) => (i >= 0 && i < row.length) ? row[i] : '';
-      final code = _cleanCode(at(cCode));
+      pr.rows++;
+      final rawCode = at(cCode);
+      if (Codes.isSci(rawCode)) pr.sci++;
+      final codes = Codes.splitMany(rawCode);
       final name = at(cName).trim();
-      if (code.isEmpty || name.isEmpty) continue;
+      final alts = <String>[...codes.skip(1)];
+      for (final i in extraCols) {
+        if (Codes.isSci(at(i))) pr.sci++;
+        alts.addAll(Codes.splitMany(at(i)));
+      }
+      if (codes.isEmpty) {
+        // an extra-code-only row is still not importable: no primary barcode
+        if (name.isNotEmpty || alts.isNotEmpty) pr.noCode++;
+        continue;
+      }
+      if (name.isEmpty) {
+        pr.noName++;
+        continue;
+      }
       double? price = cPrice < 0 ? 0.0 : _price(at(cPrice));
       if (price == null) {
         if (hRow >= 0) {
           price = 0.0;
         } else {
-          continue; // no header and the 3rd cell is not a number: header-like / junk row
+          pr.other++; // no header and the 3rd cell is not a number: header-like / junk row
+          continue;
         }
       }
-      out.add(Product(barcode: code, name: name, price: price));
+      pr.items.add(ImportItem(Product(barcode: codes.first, name: name, price: price), alts));
     }
-    return out;
+    return pr;
   }
 
   // ------------------------------------------------------------- xlsx (zip)
-  static List<List<String>> _readXlsx(Uint8List bytes) {
+  @visibleForTesting
+  static List<List<String>> rowsFromXlsx(Uint8List bytes) {
     final entries = _zipEntries(bytes);
     final shared = <String>[];
     final ss = entries['xl/sharedStrings.xml'];
@@ -240,7 +317,7 @@ class Importer {
     for (final name in sheets) {
       final rows = _readSheet(utf8.decode(_zipRead(bytes, entries[name]!), allowMalformed: true), shared);
       if (rows.length > best.length) best = rows;
-      if (fromRows(rows).isNotEmpty) return rows; // the first sheet that really holds products
+      if (fromRows(rows).items.isNotEmpty) return rows; // the first sheet that really holds products
     }
     return best;
   }

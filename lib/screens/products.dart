@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../db.dart';
 import '../i18n.dart';
 import '../importer.dart';
+import 'import_report.dart';
 import '../services.dart';
 import '../theme.dart';
 import 'home.dart';
@@ -88,8 +89,8 @@ class _ProductsScreenState extends State<ProductsScreen> {
   Future<void> _import() async {
     setState(() => _importing = true);
     try {
-      final n = await Files.importProducts();
-      if (n != null && mounted) toast(context, tr('import_ok', [n]));
+      final rep = await Files.importProducts();
+      if (rep != null && mounted) await showImportReport(context, rep);
     } on ImportException catch (e) {
       if (mounted) toast(context, e.message);
     } catch (e) {

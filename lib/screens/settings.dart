@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../db.dart';
 import '../i18n.dart';
 import '../importer.dart';
+import 'import_report.dart';
 import '../services.dart';
 import '../theme.dart';
 import 'home.dart';
@@ -161,8 +162,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onPressed: _busy
                 ? null
                 : () => _run(() async {
-                      final n = await Files.importProducts();
-                      if (n != null && mounted) toast(context, tr('import_ok', [n]));
+                      final rep = await Files.importProducts();
+                      if (rep != null && mounted) await showImportReport(context, rep);
                     }),
           ),
         ),

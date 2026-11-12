@@ -250,10 +250,10 @@ class Files {
     await Share.shareXFiles([XFile(f.path)], subject: 'JO POS backup');
   }
 
-  /// Returns the number of imported products, or null when the user cancelled.
+  /// Returns the verified import report, or null when the user cancelled.
   /// Excel (.xlsx), JO PHARMA database (jo_pharmacy.db), JO POS backup, CSV or JSON - detected from the file itself.
   /// Throws [ImportException] (already translated) when the file cannot be used.
-  static Future<int?> importProducts() async {
+  static Future<ImportReport?> importProducts() async {
     final res = await FilePicker.platform.pickFiles(type: FileType.any, withData: false);
     if (res == null || res.files.isEmpty) return null;
     final path = res.files.first.path;
@@ -262,15 +262,21 @@ class Files {
   }
 
   @visibleForTesting
-  static List<Product> parseProducts(String text) {
+  static ParseResult parseProducts(String text) {
     final t = text.trimLeft();
-    final out = <Product>[];
+    final out = ParseResult();
     if (t.startsWith('{') || t.startsWith('[')) {
       final j = jsonDecode(t);
       final list = j is List ? j : (j['products'] ?? []) as List;
       for (final e in list) {
+        out.rows++;
         final p = _productFromJson(e);
-        if (p != null) out.add(p);
+        if (p == null) {
+          out.noCode++;
+          continue;
+        }
+        final extra = (e is Map ? (e['codes'] ?? e['alt_codes'] ?? e['barcodes']) : null);
+        out.items.add(ImportItem(p, extra is List ? extra.map((x) => '$x').toList() : const []));
       }
       return out;
     }
