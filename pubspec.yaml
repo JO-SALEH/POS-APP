@@ -13,7 +13,7 @@ dependencies:
   path: ^1.9.0
   mobile_scanner: ^7.4.2   # 7.x: Android 15/16 (16 KB pages) support, black-screen + CameraX init fixes
   http: ^1.2.1
-  share_plus: ^9.0.0
+  share_plus: ^10.1.4   # 10.x keeps Share.shareXFiles and uses web ^1 (needed by mobile_scanner 7)
   file_picker: ^8.0.6
   crypto: ^3.0.3
   path_provider: ^2.1.3
