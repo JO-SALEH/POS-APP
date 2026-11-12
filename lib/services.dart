@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'db.dart';
 import 'i18n.dart';
+import 'importer.dart';
 
 // =============================================================== app state
 class AppState extends ChangeNotifier {
@@ -250,14 +251,14 @@ class Files {
   }
 
   /// Returns the number of imported products, or null when the user cancelled.
+  /// Excel (.xlsx), JO PHARMA database (jo_pharmacy.db), JO POS backup, CSV or JSON - detected from the file itself.
+  /// Throws [ImportException] (already translated) when the file cannot be used.
   static Future<int?> importProducts() async {
-    final res = await FilePicker.platform.pickFiles(type: FileType.any, withData: true);
+    final res = await FilePicker.platform.pickFiles(type: FileType.any, withData: false);
     if (res == null || res.files.isEmpty) return null;
-    final pf = res.files.first;
-    final bytes = pf.bytes ?? await File(pf.path!).readAsBytes();
-    var text = utf8.decode(bytes, allowMalformed: true);
-    if (text.startsWith('\uFEFF')) text = text.substring(1);
-    return Db.bulkUpsert(parseProducts(text));
+    final path = res.files.first.path;
+    if (path == null) throw ImportException(tr('import_empty'));
+    return Importer.importPath(path, parseText: parseProducts);
   }
 
   @visibleForTesting
@@ -277,17 +278,8 @@ class Files {
     if (lines.isEmpty) return out;
     final first = lines.first;
     final delim = first.contains('\t') ? '\t' : (first.contains(';') && !first.contains(',') ? ';' : ',');
-    for (final line in lines) {
-      final c = _splitCsv(line, delim);
-      if (c.length < 3) continue;
-      final price = double.tryParse(c[2].trim().replaceAll(',', '.'));
-      if (price == null) continue; // header row or junk
-      final code = c[0].trim();
-      final name = c[1].trim();
-      if (code.isEmpty || name.isEmpty) continue;
-      out.add(Product(barcode: code, name: name, price: price));
-    }
-    return out;
+    // header names (English / Arabic) pick the columns; without a header it is barcode, name, price
+    return Importer.fromRows(lines.map((l) => _splitCsv(l, delim)).toList());
   }
 
   static List<String> _splitCsv(String line, String d) {

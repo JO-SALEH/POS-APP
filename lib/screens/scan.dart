@@ -17,11 +17,64 @@ class ScanPage extends StatefulWidget {
   State<ScanPage> createState() => _ScanPageState();
 }
 
-class _ScanPageState extends State<ScanPage> {
-  final MobileScannerController _c = MobileScannerController(facing: CameraFacing.back);
+class _ScanPageState extends State<ScanPage> with WidgetsBindingObserver {
+  // autoStart:false -> we start the camera ourselves, catch the real error and can retry (after the user allows the camera, etc.)
+  final MobileScannerController _c = MobileScannerController(facing: CameraFacing.back, autoStart: false);
   bool _busy = false;
   bool _torch = false;
   String? _flash;
+  bool _starting = true; // camera is being started / waiting for the permission dialog
+  bool _running = false;
+  bool _wasRunning = false; // was running when the app went to the background
+  bool _denied = false; // permission refused
+  String? _errText; // the real error, shown on screen
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _start());
+  }
+
+  Future<void> _start() async {
+    if (!mounted || _running) return;
+    setState(() {
+      _starting = true;
+      _errText = null;
+      _denied = false;
+    });
+    try {
+      await _c.start(); // asks for the camera permission the first time
+      _running = true;
+    } on MobileScannerException catch (e) {
+      if (mounted) {
+        setState(() {
+          _denied = e.errorCode == MobileScannerErrorCode.permissionDenied;
+          _errText = '$e';
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _errText = '$e');
+    }
+    if (mounted) setState(() => _starting = false);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // back from the phone Settings (permission just allowed) or from the background
+      if (_errText != null && _denied) {
+        _start();
+      } else if (_wasRunning) {
+        _wasRunning = false;
+        _start();
+      }
+    } else if (state == AppLifecycleState.paused && _running) {
+      _wasRunning = true;
+      _running = false;
+      _c.stop();
+    }
+  }
 
   Future<void> _detect(BarcodeCapture cap) async {
     if (_busy) return;
@@ -50,9 +103,31 @@ class _ScanPageState extends State<ScanPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _c.dispose();
     super.dispose();
   }
+
+  Widget _errorPanel() => Container(
+        color: Colors.black,
+        alignment: Alignment.center,
+        padding: const EdgeInsets.all(24),
+        child: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Icon(Icons.no_photography_outlined, color: JC.danger, size: 56),
+            const SizedBox(height: 14),
+            Text(_denied ? tr('cam_denied') : tr('cam_error'),
+                textAlign: TextAlign.center, style: const TextStyle(color: JC.danger, fontSize: 16, height: 1.5)),
+            const SizedBox(height: 14),
+            GoldButton(label: tr('cam_retry'), icon: Icons.refresh, onPressed: _start),
+            const SizedBox(height: 18),
+            Text(tr('cam_details'), style: const TextStyle(color: JC.muted, fontSize: 12)),
+            const SizedBox(height: 4),
+            SelectableText(_errText ?? '',
+                textDirection: TextDirection.ltr, textAlign: TextAlign.center, style: const TextStyle(color: JC.silverDim, fontSize: 11)),
+          ]),
+        ),
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -61,17 +136,12 @@ class _ScanPageState extends State<ScanPage> {
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(fit: StackFit.expand, children: [
-        MobileScanner(
-          controller: _c,
-          onDetect: _detect,
-          errorBuilder: (c, e, w) => Center(
-            child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: Text(tr('cam_error'), textAlign: TextAlign.center, style: const TextStyle(color: JC.danger, fontSize: 16)),
-            ),
-          ),
-        ),
-        Center(
+        MobileScanner(controller: _c, onDetect: _detect),
+        if (_errText != null) _errorPanel(),
+        if (_starting && _errText == null)
+          Center(child: Text(tr('cam_starting'), style: const TextStyle(color: JC.silverDim))),
+        if (_errText == null)
+          Center(
           child: Container(
             width: box,
             height: box * 0.7,
@@ -96,8 +166,10 @@ class _ScanPageState extends State<ScanPage> {
                   tooltip: tr('torch'),
                   icon: Icon(_torch ? Icons.flash_on : Icons.flash_off, color: JC.gold, size: 28),
                   onPressed: () async {
-                    await _c.toggleTorch();
-                    setState(() => _torch = !_torch);
+                    try {
+                      await _c.toggleTorch();
+                      if (mounted) setState(() => _torch = !_torch);
+                    } catch (_) {} // some phones have no flash
                   },
                 ),
               ]),

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../db.dart';
 import '../i18n.dart';
+import '../importer.dart';
 import '../services.dart';
 import '../theme.dart';
 import 'home.dart';
@@ -53,6 +54,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       await job();
     } on SyncException catch (e) {
       if (mounted) toast(context, tr('sync_fail', [e.message]));
+    } on ImportException catch (e) {
+      if (mounted) toast(context, e.message);
     } catch (e) {
       if (mounted) toast(context, '$e');
     }
@@ -148,7 +151,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       ]),
       _section(tr('import_file'), [
-        Text(tr('import_hint'), style: const TextStyle(color: JC.muted, fontSize: 12)),
+        Text(tr('import_hint'), style: const TextStyle(color: JC.muted, fontSize: 12, height: 1.5)),
         _gap(),
         SizedBox(
           width: double.infinity,

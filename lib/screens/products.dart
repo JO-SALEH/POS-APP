@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import '../db.dart';
 import '../i18n.dart';
+import '../importer.dart';
+import '../services.dart';
 import '../theme.dart';
 import 'home.dart';
 import 'scan.dart';
@@ -68,6 +70,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
   final _q = TextEditingController();
   List<Product> _items = [];
   int _total = 0;
+  bool _importing = false;
 
   @override
   void initState() {
@@ -79,6 +82,21 @@ class _ProductsScreenState extends State<ProductsScreen> {
   void dispose() {
     _q.dispose();
     super.dispose();
+  }
+
+  /// Excel / JO PHARMA database / CSV / JSON -> products.
+  Future<void> _import() async {
+    setState(() => _importing = true);
+    try {
+      final n = await Files.importProducts();
+      if (n != null && mounted) toast(context, tr('import_ok', [n]));
+    } on ImportException catch (e) {
+      if (mounted) toast(context, e.message);
+    } catch (e) {
+      if (mounted) toast(context, tr('import_fail', ['$e']));
+    }
+    if (mounted) setState(() => _importing = false);
+    _load();
   }
 
   Future<void> _load() async {
@@ -108,19 +126,35 @@ class _ProductsScreenState extends State<ProductsScreen> {
       ),
       body: Column(children: [
         PageTitle('${tr('nav_products')}  ($_total)'),
+        if (_importing) const LinearProgressIndicator(color: JC.gold, backgroundColor: JC.surface3),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: TextField(
-            controller: _q,
-            onChanged: (_) => _load(),
-            style: const TextStyle(color: JC.silver),
-            decoration: InputDecoration(hintText: tr('search_hint'), prefixIcon: const Icon(Icons.search, color: JC.gold)),
-          ),
+          child: Row(children: [
+            Expanded(
+              child: TextField(
+                controller: _q,
+                onChanged: (_) => _load(),
+                style: const TextStyle(color: JC.silver),
+                decoration: InputDecoration(hintText: tr('search_hint'), prefixIcon: const Icon(Icons.search, color: JC.gold)),
+              ),
+            ),
+            IconButton(
+              tooltip: tr('import_file'),
+              icon: const Icon(Icons.upload_file, color: JC.gold, size: 28),
+              onPressed: _importing ? null : _import,
+            ),
+          ]),
         ),
         const SizedBox(height: 8),
         Expanded(
           child: _items.isEmpty
-              ? Center(child: Text(tr('no_products'), style: const TextStyle(color: JC.muted)))
+              ? Center(
+                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    Text(tr('no_products'), style: const TextStyle(color: JC.muted)),
+                    const SizedBox(height: 14),
+                    GhostButton(label: tr('import_file'), icon: Icons.upload_file, onPressed: _importing ? null : _import),
+                  ]),
+                )
               : ListView.separated(
                   padding: const EdgeInsets.fromLTRB(12, 0, 12, 90),
                   itemCount: _items.length,

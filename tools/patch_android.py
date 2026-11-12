@@ -31,10 +31,27 @@ if "usesCleartextTraffic" not in m:
 with open(MANIFEST, "w", encoding="utf-8") as f:
     f.write(m)
 
+# mobile_scanner 7.x needs minSdk 23; use 24 (Android 7.0) so the camera library always builds
+for gradle in ("build.gradle.kts", "build.gradle"):
+    gp = os.path.join(ROOT, "android", "app", gradle)
+    if os.path.exists(gp):
+        with open(gp, "r", encoding="utf-8") as f:
+            g = f.read()
+
+        def _min(mo):
+            val = mo.group(3)
+            return mo.group(0) if (val.isdigit() and int(val) >= 24) else mo.group(1) + mo.group(2) + "24"
+
+        g2 = re.sub(r"(minSdk(?:Version)?)(\s*=\s*|\s+)(flutter\.minSdkVersion|\d+)", _min, g, count=1)
+        if g2 != g:
+            with open(gp, "w", encoding="utf-8") as f:
+                f.write(g2)
+            print("minSdk raised to 24 in", gradle)
+
 for dens in ("mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi"):
     src = os.path.join(ICONS, f"ic_launcher_{dens}.png")
     dst_dir = os.path.join(RES, f"mipmap-{dens}")
     if os.path.exists(src) and os.path.isdir(dst_dir):
         shutil.copyfile(src, os.path.join(dst_dir, "ic_launcher.png"))
 
-print("Android project patched: permissions, name, cleartext HTTP, icons.")
+print("Android project patched: permissions, name, cleartext HTTP, minSdk, icons.")

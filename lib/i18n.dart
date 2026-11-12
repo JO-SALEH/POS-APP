@@ -60,9 +60,26 @@ const Map<String, List<String>> _s = {
   'sync_fail': ['Sync failed: {0}', 'فشلت المزامنة: {0}'],
   'sync_none': ['Nothing to sync', 'لا يوجد ما يُزامَن'],
   'pull_products': ['Get products from desktop', 'جلب المنتجات من الديسك توب'],
-  'import_file': ['Import products file', 'استيراد ملف منتجات'],
-  'import_hint': ['JSON or CSV: barcode,name,price', 'JSON أو CSV: الباركود,الاسم,السعر'],
+  'import_file': ['Import products (Excel / database / CSV)', 'استيراد المنتجات (Excel / قاعدة بيانات / CSV)'],
+  'import_hint': [
+    'Pick an Excel .xlsx file, the JO PHARMA database file (jo_pharmacy.db), a JO POS backup, CSV or JSON. Columns are found by their names (barcode / name / price, or باركود / الاسم / السعر); without a header the order is barcode, name, price.',
+    'اختر ملف Excel بصيغة xlsx، أو ملف قاعدة بيانات JO PHARMA (jo_pharmacy.db)، أو نسخة JO POS، أو CSV أو JSON. الأعمدة تُعرف بأسمائها (باركود / الاسم / السعر)، وبدون عناوين يكون الترتيب: باركود، اسم، سعر.'
+  ],
   'import_ok': ['Imported {0} products', 'تم استيراد {0} منتج'],
+  'import_empty': [
+    'No products found in this file. It needs a barcode column and a name column (and a price column).',
+    'لم أجد منتجات في هذا الملف. يلزم عمود للباركود وعمود للاسم (وعمود للسعر).'
+  ],
+  'import_xls': [
+    'Old .xls files are not supported. Open it in Excel, choose Save As .xlsx, then import again.',
+    'ملفات xls القديمة غير مدعومة. افتحه في Excel واختر حفظ باسم xlsx ثم استورده مرة أخرى.'
+  ],
+  'import_db_unknown': [
+    'This database has no products table (medications / products).',
+    'قاعدة البيانات هذه لا تحتوي جدول المنتجات (medications / products).'
+  ],
+  'import_fail': ['Import failed: {0}', 'فشل الاستيراد: {0}'],
+  'import_btn': ['Import', 'استيراد'],
   'export_db': ['Backup database file', 'نسخة احتياطية لقاعدة البيانات'],
   'server': ['Desktop server', 'سيرفر الديسك توب'],
   'server_hint': ['e.g. 192.168.1.10:8765', 'مثال: 192.168.1.10:8765'],
@@ -84,7 +101,14 @@ const Map<String, List<String>> _s = {
   'scan_hint': ['Point the camera at a barcode or QR', 'وجّه الكاميرا نحو الباركود أو QR'],
   'added': ['Added: {0}', 'تمت الإضافة: {0}'],
   'torch': ['Flash', 'الفلاش'],
-  'cam_error': ['Camera unavailable. Check permission.', 'الكاميرا غير متاحة. تحقق من الصلاحية.'],
+  'cam_error': ['Camera unavailable.', 'الكاميرا غير متاحة.'],
+  'cam_denied': [
+    'Camera permission is denied. Open the phone Settings > Apps > JO POS > Permissions > Camera, allow it, come back and press Retry.',
+    'صلاحية الكاميرا مرفوضة. افتح إعدادات الموبايل > التطبيقات > JO POS > الأذونات > الكاميرا واسمح بها، ثم ارجع واضغط إعادة المحاولة.'
+  ],
+  'cam_retry': ['Retry', 'إعادة المحاولة'],
+  'cam_details': ['Details', 'التفاصيل'],
+  'cam_starting': ['Starting camera...', 'جارٍ تشغيل الكاميرا...'],
   'confirm_delete': ['Delete this item?', 'حذف هذا العنصر؟'],
   'confirm_clear': ['Clear the cart?', 'تفريغ السلة؟'],
   'invoice': ['Invoice', 'فاتورة'],

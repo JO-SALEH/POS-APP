@@ -215,5 +215,5 @@ Future<bool> confirmDialog(BuildContext context, String message, String okLabel,
 void toast(BuildContext context, String msg) {
   ScaffoldMessenger.of(context)
     ..clearSnackBars()
-    ..showSnackBar(SnackBar(content: Text(msg), duration: const Duration(seconds: 2)));
+    ..showSnackBar(SnackBar(content: Text(msg), duration: Duration(seconds: msg.length > 60 ? 7 : 2)));
 }
