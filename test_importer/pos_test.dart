@@ -127,4 +127,47 @@ void main() {
       expect((await Db.lowStock(threshold: 5)).map((e) => e.barcode), ['1000002']);
     });
   });
+
+  group('desktop v2 data', () {
+    test('catalog carries expiry, reorder level, sellable and customers', () async {
+      await freshDb();
+      final yr = DateTime.now().year;
+      final pr = Importer.fromCatalog({
+        'cols': ['id', 'barcode', 'name', 'name_ar', 'price', 'units_per_pack', 'strip_size', 'stock_units', 'expiry', 'min_stock', 'sellable_units'],
+        'rows': [
+          [1, '3000001', 'Old', '', 10, 10, 5, 40, '${yr - 1}-01-01', 3, 0],
+          [2, '3000002', 'Soon', '', 10, 10, 5, 40, '${yr + 5}-01-01', 3, 40],
+        ],
+        'codes': []
+      });
+      await Importer.commit(pr);
+      final old = (await Db.byBarcode('3000001'))!;
+      expect([old.minStock, old.sellable, old.expired], [3, 0, true]);
+      expect((await Db.byBarcode('3000002'))!.expired, false);
+      expect((await Db.byBarcode('3000002'))!.available, 40);
+      // 40 units <= 3 packs * 10 -> low even above the plain threshold of 5? 40 > 30 so no
+      expect((await Db.lowStock(threshold: 5)).length, 0);
+      expect((await Db.expiringSoon(days: 90)).map((e) => e.barcode), ['3000001']);
+      await Db.replaceCustomers([
+        [1, 'Ali Hassan', '079', 12.5],
+        [2, 'Sara', '', 0]
+      ]);
+      expect(await Db.customerBalance('ali hassan'), 12.5);
+      expect((await Db.searchCustomers('sa')).single.name, 'Sara');
+    });
+    test('returns go to the PC only after their sale is synced', () async {
+      final p = await seed();
+      final no = await Db.createSale([CartLine(p, 2, 'unit')], 0, 'Cash', 'admin');
+      final sale = (await Db.recentSales()).single;
+      await Db.createReturn(sale.id, {(await Db.returnable(sale.id)).single.itemId: 1}, 'admin');
+      expect(await Db.unsyncedReturns(), 1);
+      expect(await Db.lanReturns(), isEmpty); // sale not on the PC yet
+      await Db.markSynced([no]);
+      final r = (await Db.lanReturns()).single;
+      expect(r['client_sale_id'], endsWith('-$no'));
+      expect((r['items'] as List).single, {'barcode': '1000001', 'qty': 1, 'unit': 'unit'});
+      await Db.setReturnResult((r['client_return_id'] as String).split('-').sublist(1).join('-'), 1);
+      expect(await Db.unsyncedReturns(), 0);
+    });
+  });
 }

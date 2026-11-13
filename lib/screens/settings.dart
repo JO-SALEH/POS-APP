@@ -24,6 +24,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _store = TextEditingController();
   final _tax = TextEditingController();
   final _low = TextEditingController();
+  final _expd = TextEditingController();
   final _cuser = TextEditingController();
   final _cpass = TextEditingController();
   bool _busy = false;
@@ -40,13 +41,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _store.text = await Db.getSetting('store_name', 'JØ PHARMA');
     _tax.text = await Db.getSetting('tax_rate', '0');
     _low.text = await Db.getSetting('low_stock', '5');
+    _expd.text = await Db.getSetting('expiry_days', '90');
     _cuser.text = await Db.getSetting('cashier_user');
     if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
-    for (final c in [_dev, _user, _pass, _store, _tax, _low, _cuser, _cpass]) {
+    for (final c in [_dev, _user, _pass, _store, _tax, _low, _expd, _cuser, _cpass]) {
       c.dispose();
     }
     super.dispose();
@@ -241,6 +243,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await Db.setSetting('store_name', _store.text.trim().isEmpty ? 'JØ PHARMA' : _store.text.trim());
     await Db.setSetting('tax_rate', '${t.clamp(0, 100)}');
     await Db.setSetting('low_stock', '${l.clamp(0, 100000)}');
+    await Db.setSetting('expiry_days', '${(int.tryParse(_expd.text.trim()) ?? 90).clamp(0, 3650)}');
     if (mounted) toast(context, tr('saved'));
   }
 
@@ -323,6 +326,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
             keyboardType: TextInputType.number,
             style: const TextStyle(color: JC.silver),
             decoration: InputDecoration(labelText: tr('low_stock_at')),
+          ),
+          _gap(),
+          TextField(
+            controller: _expd,
+            keyboardType: TextInputType.number,
+            style: const TextStyle(color: JC.silver),
+            decoration: InputDecoration(labelText: tr('exp_setting')),
           ),
           _gap(),
           SizedBox(width: double.infinity, child: GoldButton(label: tr('save'), compact: true, onPressed: _saveSell)),

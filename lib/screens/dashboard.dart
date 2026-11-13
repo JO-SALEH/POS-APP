@@ -16,6 +16,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   DayReport? _r;
   List<Product> _low = [];
   int _stockKnown = 0;
+  List<Product> _exp = [];
+  int _expDays = 90;
   int _lowAt = 5;
   Map<String, Object?>? _shift;
   double _expected = 0;
@@ -33,6 +35,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final at = int.tryParse(await Db.getSetting('low_stock', '5')) ?? 5;
     final low = await Db.lowStock(threshold: at);
     final known = await Db.stockKnownCount();
+    final expDays = int.tryParse(await Db.getSetting('expiry_days', '90')) ?? 90;
+    final exp = await Db.expiringSoon(days: expDays);
     final sh = await Db.openShift();
     final exp = sh == null ? 0.0 : await Db.expectedCash(sh);
     final past = await Db.lastShifts();
@@ -42,6 +46,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _low = low;
       _lowAt = at;
       _stockKnown = known;
+      _exp = exp;
+      _expDays = expDays;
       _shift = sh;
       _expected = exp;
       _past = past;
@@ -195,6 +201,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
             else
               for (final p in _low.take(30)) _kv(p.name, '${p.stock}', c: (p.stock ?? 0) <= 0 ? JC.danger : JC.warn),
           ]),
+          if (_stockKnown > 0)
+            _box('${tr('expiring_title')} (≤ $_expDays)', [
+              if (_exp.isEmpty)
+                Text(tr('expiring_none'), style: const TextStyle(color: JC.success))
+              else
+                for (final p in _exp.take(30)) _kv(p.name, p.expiry, c: (p.daysToExpiry ?? 0) < 0 ? JC.danger : JC.warn),
+            ]),
         ],
       ]),
     );

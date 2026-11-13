@@ -131,7 +131,7 @@ class Importer {
   /// One medicine of the desktop (database row or LAN catalog row): primary barcode + its extra codes.
   static void _addMedicine(ParseResult pr, Object? id, Object? barcode, Object? name, Object? nameAr, Object? price,
       Map<int, List<String>> extra,
-      {Object? upp, Object? strip, Object? stock, bool meta = false}) {
+      {Object? upp, Object? strip, Object? stock, Object? expiry, Object? minStock, Object? sellable, bool meta = false}) {
     pr.rows++;
     var code = Codes.norm('${barcode ?? ''}');
     final alts = [...?(id is int ? extra[id] : null)];
@@ -158,6 +158,9 @@ class Importer {
             unitsPerPack: pack,
             stripSize: asInt(strip, 0).clamp(0, 100000),
             stock: stock == null ? null : asInt(stock, 0),
+            expiry: '${expiry ?? ''}'.trim(),
+            minStock: asInt(minStock, 0).clamp(0, 100000000),
+            sellable: sellable == null ? null : asInt(sellable, 0),
             hasMeta: meta),
         alts));
   }
@@ -168,6 +171,7 @@ class Importer {
     final iId = cols.indexOf('id'), iBc = cols.indexOf('barcode'), iName = cols.indexOf('name');
     final iAr = cols.indexOf('name_ar'), iPrice = cols.indexOf('price');
     final iUpp = cols.indexOf('units_per_pack'), iStrip = cols.indexOf('strip_size'), iStock = cols.indexOf('stock_units');
+    final iExp = cols.indexOf('expiry'), iMin = cols.indexOf('min_stock'), iSell = cols.indexOf('sellable_units');
     if (iId < 0 || iBc < 0 || iName < 0 || iPrice < 0) throw ImportException(tr('import_db_unknown'));
     final extra = <int, List<String>>{};
     for (final c in ((j['codes'] ?? []) as List)) {
@@ -181,7 +185,7 @@ class Importer {
       if (r is! List || r.length <= iPrice) continue;
       Object? at(int i) => i >= 0 && i < r.length ? r[i] : null;
       _addMedicine(pr, r[iId], r[iBc], r[iName], iAr >= 0 && iAr < r.length ? r[iAr] : '', r[iPrice], extra,
-          upp: at(iUpp), strip: at(iStrip), stock: at(iStock), meta: true);
+          upp: at(iUpp), strip: at(iStrip), stock: at(iStock), expiry: at(iExp), minStock: at(iMin), sellable: at(iSell), meta: true);
     }
     return pr;
   }

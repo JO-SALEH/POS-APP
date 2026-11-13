@@ -65,6 +65,7 @@ class LanPushResult {
   int booked = 0; // new invoices booked on the desktop
   int duplicates = 0; // the desktop already had them (sent before)
   int unmatched = 0; // booked, but some barcodes are unknown there: link them in the desktop "pending" list
+  int returnsSent = 0; // returns the desktop booked
   int failed = 0; // refused: stay unsent, reason in the invoice note
   final List<String> errors = [];
   int get acknowledged => booked + duplicates + unmatched;
@@ -177,16 +178,51 @@ class Lan {
     if (p == null) throw LanException(tr('lan_not_paired'));
     final invoices = await Db.lanInvoices();
     final res = LanPushResult();
-    if (invoices.isEmpty) return res;
+    if (invoices.isEmpty && await Db.unsyncedReturns() == 0) return res;
     try {
-      await _pushTo(p, invoices, res);
+      if (invoices.isNotEmpty) await _pushTo(p, invoices, res);
+      await _pushReturns(p, res);
     } on LanException catch (e) {
       if (!e.unreachable || !rediscover) rethrow;
       final np = await findDesktop(p);
       if (np == null) rethrow;
-      await _pushTo(np, await Db.lanInvoices(), res); // only what is still unsent
+      final again = await Db.lanInvoices();
+      if (again.isNotEmpty) await _pushTo(np, again, res); // only what is still unsent
+      await _pushReturns(np, res);
     }
     return res;
+  }
+
+  /// Returns of sales the PC already has: it restocks, books the refund and lowers the customer's credit.
+  static Future<void> _pushReturns(Pairing p, LanPushResult res) async {
+    final rets = await Db.lanReturns();
+    if (rets.isEmpty) return;
+    final install = await Db.installId();
+    for (var i = 0; i < rets.length; i += 25) {
+      final chunk = rets.sublist(i, i + 25 > rets.length ? rets.length : i + 25);
+      final http.Response r = await _net(() => http
+          .post(Uri.parse('${p.base}/returns'), headers: _hdr(p, json: true), body: utf8.encode(jsonEncode({'returns': chunk})))
+          .timeout(const Duration(seconds: 30)));
+      if (r.statusCode == 404) return; // an older PC program without returns: they stay on the phone
+      if (r.statusCode != 200) throw _httpError(r);
+      final results = _json(r)['results'];
+      if (results is! List) throw LanException('bad reply');
+      for (final x in results) {
+        if (x is! Map) continue;
+        final cid = '${x['client_return_id'] ?? ''}';
+        if (!cid.startsWith('$install-')) continue;
+        final receipt = cid.substring(install.length + 1);
+        final st = '${x['status'] ?? ''}';
+        if (st == 'done' || st == 'duplicate') {
+          await Db.setReturnResult(receipt, 1);
+          res.returnsSent++;
+        } else if (st == 'failed' && x['retryable'] != true) {
+          await Db.setReturnResult(receipt, 2, note: '${x['error'] ?? 'error'}');
+          res.failed++;
+          res.errors.add('$receipt: ${x['error']}');
+        } // not_booked / retryable: stays pending for the next round
+      }
+    }
   }
 
   static Future<void> _pushTo(Pairing p, List<Map<String, Object?>> invoices, LanPushResult res) async {
@@ -274,6 +310,7 @@ class Lan {
       return j;
     });
     final rep = await Importer.commit(Importer.fromCatalog(body));
+    if (body['customers'] is List) await Db.replaceCustomers(body['customers'] as List);
     if (rep.verified) await Db.setSetting('lan_rev', '${body['rev'] ?? rev}');
     _lastCatalog = DateTime.now();
     return rep;
@@ -377,7 +414,7 @@ class Lan {
     _busy = true;
     try {
       await _publish(online: status.value.online, busy: true);
-      final n = await Db.unsyncedCount();
+      final n = await Db.unsyncedCount() + await Db.unsyncedReturns();
       final canScan = DateTime.now().difference(_lastScan) > const Duration(minutes: 3);
       if (n > 0) {
         await push(rediscover: canScan);

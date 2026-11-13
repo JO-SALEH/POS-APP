@@ -102,9 +102,23 @@ class _SellScreenState extends State<SellScreen> {
 
   Future<void> _checkout() async {
     // like the desktop: warn when something is sold with no (or not enough) stock
-    final short = [for (final l in app.cart) if (l.product.stock != null && l.baseUnits > l.product.stock!) l];
+    final expired = [for (final l in app.cart) if (l.product.expired) l];
+    if (expired.isNotEmpty) {
+      final names = expired.map((l) => '• ${l.product.name}  (${tr('exp_expired', [l.product.expiry])})').join('\n');
+      await showDialog<void>(
+        context: context,
+        builder: (d) => AlertDialog(
+          backgroundColor: JC.surface2,
+          title: Text(tr('app'), style: const TextStyle(color: JC.danger, fontWeight: FontWeight.bold)),
+          content: Text('${tr('expired_block')}\n\n$names', style: const TextStyle(color: JC.silver, height: 1.5)),
+          actions: [TextButton(onPressed: () => Navigator.pop(d), child: Text(tr('ok')))],
+        ),
+      );
+      return;
+    }
+    final short = [for (final l in app.cart) if (l.product.available != null && l.baseUnits > l.product.available!) l];
     if (short.isNotEmpty) {
-      final names = short.map((l) => '• ${l.product.name}  (${tr('stock_of', [l.product.stock!])})').join('\n');
+      final names = short.map((l) => '• ${l.product.name}  (${tr('avail_of', [l.product.available!])})').join('\n');
       if (!await confirmDialog(context, '${tr('short_msg')}\n\n$names', tr('sell_anyway'), tr('cancel'), danger: true)) return;
     }
     if (!mounted) return;
@@ -247,7 +261,9 @@ class _SellScreenState extends State<SellScreen> {
               return ListTile(
                 dense: true,
                 title: Text(p.name, style: const TextStyle(color: JC.silver)),
-                subtitle: Text(p.stock == null ? p.barcode : '${p.barcode}  ·  ${tr('stock_of', [p.stock!])}', style: TextStyle(color: (p.stock ?? 1) <= 0 ? JC.danger : JC.muted, fontSize: 11)),
+                subtitle: Text(
+                    [p.barcode, if (p.stock != null) tr('stock_of', [p.stock!]), if (p.expiry.isNotEmpty) (p.expired ? tr('exp_expired', [p.expiry]) : tr('exp_line', [p.expiry]))].join('  ·  '),
+                    style: TextStyle(color: (p.stock ?? 1) <= 0 || p.expired ? JC.danger : ((p.daysToExpiry ?? 999) <= 90 ? JC.warn : JC.muted), fontSize: 11)),
                 trailing: Text(fmtMoney(p.price), style: const TextStyle(color: JC.gold, fontWeight: FontWeight.bold)),
                 onTap: () {
                   app.addToCart(p);
@@ -396,8 +412,12 @@ class _CartTile extends StatelessWidget {
             const SizedBox(height: 4),
             Text('${fmtMoney(line.price)} × ${line.qty} = ${fmtMoney(line.subtotal)}', style: const TextStyle(color: JC.gold, fontSize: 13)),
             if (p.stock != null)
-              Text(tr('stock_of', [p.stock!]),
-                  style: TextStyle(color: line.baseUnits > p.stock! ? JC.danger : JC.muted, fontSize: 11, fontWeight: line.baseUnits > p.stock! ? FontWeight.w800 : FontWeight.w400)),
+              Text(
+                  [tr('stock_of', [p.stock!]), if (p.expiry.isNotEmpty) (p.expired ? tr('exp_expired', [p.expiry]) : tr('exp_line', [p.expiry]))].join('  ·  '),
+                  style: TextStyle(
+                      color: (p.available != null && line.baseUnits > p.available!) || p.expired ? JC.danger : ((p.daysToExpiry ?? 999) <= 90 ? JC.warn : JC.muted),
+                      fontSize: 11,
+                      fontWeight: (p.available != null && line.baseUnits > p.available!) || p.expired ? FontWeight.w800 : FontWeight.w400)),
             if (p.id != null)
               FutureBuilder<int>(
                 future: Db.altCount(p.id!),
@@ -457,6 +477,18 @@ class _CheckoutDialogState extends State<_CheckoutDialog> {
   double _taxRate = 0;
   String? _err;
   bool _busy = false;
+  double? _bal; // credit balance the PC reported for the typed customer
+  List<({String name, String phone, double balance})> _sugg = [];
+
+  Future<void> _custChanged(String v, {bool suggest = true}) async {
+    final b = await Db.customerBalance(v);
+    final s = suggest ? await Db.searchCustomers(v) : <({String name, String phone, double balance})>[];
+    if (!mounted) return;
+    setState(() {
+      _bal = b;
+      _sugg = s.where((c) => c.name.toLowerCase() != v.trim().toLowerCase()).toList();
+    });
+  }
 
   @override
   void initState() {
@@ -526,8 +558,20 @@ class _CheckoutDialogState extends State<_CheckoutDialog> {
           TextField(
             controller: _cust,
             style: const TextStyle(color: JC.silver),
-            decoration: InputDecoration(labelText: _pay == 'Credit' ? '${tr('customer')} *' : tr('customer'), helperText: tr('customer_walkin')),
+            onChanged: (v) => _custChanged(v),
+            decoration: InputDecoration(labelText: _pay == 'Credit' ? '${tr('customer')} *' : tr('customer'), helperText: _bal == null ? tr('customer_walkin') : tr('cust_balance', [fmtMoney(_bal!)])),
           ),
+          if (_sugg.isNotEmpty)
+            Wrap(spacing: 6, children: [
+              for (final c in _sugg)
+                ActionChip(
+                  label: Text(c.name, style: const TextStyle(fontSize: 12)),
+                  onPressed: () {
+                    _cust.text = c.name;
+                    _custChanged(c.name, suggest: false);
+                  },
+                ),
+            ]),
           const SizedBox(height: 14),
           Row(children: [
             Expanded(

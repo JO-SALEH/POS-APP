@@ -14,6 +14,11 @@ String fmtMoney(num v) {
   return s.endsWith('.00') ? s.substring(0, s.length - 3) : s;
 }
 
+String todayStr() {
+  final n = DateTime.now();
+  return '${n.year}-${two(n.month)}-${two(n.day)}';
+}
+
 String hashPassword(String pw) => sha256.convert(utf8.encode('jo-pos|$pw')).toString();
 
 class Product {
@@ -25,6 +30,9 @@ class Product {
   int unitsPerPack; // tablets (units) in one pack
   int stripSize; // units in one strip (0 = not sold by strip)
   int? stock; // stock in units, null = unknown (not synced from the PC yet)
+  String expiry; // earliest batch expiry (yyyy-MM-dd) from the PC, '' = unknown
+  int minStock; // reorder level in PACKS (from the PC), 0 = none
+  int? sellable; // units that are NOT expired (from the PC), null = unknown
   bool hasMeta; // true when nameAr / pack size / stock came from the PC or a database and must be saved
   Product({
     this.id,
@@ -35,6 +43,9 @@ class Product {
     this.unitsPerPack = 1,
     this.stripSize = 0,
     this.stock,
+    this.expiry = '',
+    this.minStock = 0,
+    this.sellable,
     this.hasMeta = false,
   });
 
@@ -47,7 +58,25 @@ class Product {
         unitsPerPack: ((m['units_per_pack'] as num?)?.toInt() ?? 1).clamp(1, 100000),
         stripSize: (m['strip_size'] as num?)?.toInt() ?? 0,
         stock: (m['stock'] as num?)?.toInt(),
+        expiry: (m['expiry'] as String?) ?? '',
+        minStock: (m['min_stock'] as num?)?.toInt() ?? 0,
+        sellable: (m['sellable'] as num?)?.toInt(),
       );
+
+  /// Units that can really be sold now: the PC's non-expired stock when known, else the plain stock.
+  int? get available => sellable ?? stock;
+
+  /// Everything on the shelf is past its date (the PC refuses to sell it).
+  bool get expired => expiry.isNotEmpty && expiry.compareTo(todayStr()) < 0 && (sellable ?? 0) <= 0 && (stock ?? 0) > 0;
+
+  /// Days until the earliest expiry (negative = already expired), null when unknown.
+  int? get daysToExpiry {
+    final m = RegExp(r'^(\d{4})-(\d{2})-(\d{2})').firstMatch(expiry);
+    if (m == null) return null;
+    final d = DateTime(int.parse(m.group(1)!), int.parse(m.group(2)!), int.parse(m.group(3)!));
+    final n = DateTime.now();
+    return d.difference(DateTime(n.year, n.month, n.day)).inDays;
+  }
 
   /// Ways this product can be sold, like the desktop: pack always; strip when a strip size is set; single unit when a pack has several.
   List<String> get unitOptions {
@@ -170,7 +199,7 @@ enum ProductSort { name, newest, priceAsc, priceDesc }
 class Db {
   static Database? _db;
 
-  static const schemaVersion = 4;
+  static const schemaVersion = 5;
 
   static Future<Database> get db async {
     if (_db != null) return _db!;
@@ -204,7 +233,10 @@ class Db {
           name_ar TEXT,
           units_per_pack INTEGER NOT NULL DEFAULT 1,
           strip_size INTEGER NOT NULL DEFAULT 0,
-          stock INTEGER)''');
+          stock INTEGER,
+          expiry TEXT,
+          min_stock INTEGER NOT NULL DEFAULT 0,
+          sellable INTEGER)''');
       await d.execute('''CREATE TABLE alternatives(
           product_id INTEGER NOT NULL,
           alt_id INTEGER NOT NULL,
@@ -238,6 +270,7 @@ class Db {
       await d.execute('CREATE INDEX idx_sales_synced ON sales(synced)');
       await _createCodes(d);
       await _createV4(d);
+      await _createV5(d);
     }, onUpgrade: (d, from, to) async {
       if (from < 2) {
         await _createCodes(d);
@@ -262,7 +295,30 @@ class Db {
         }
         await _createV4(d);
       }
+      if (from < 5) {
+        for (final a in const [
+          'ALTER TABLE products ADD COLUMN expiry TEXT',
+          'ALTER TABLE products ADD COLUMN min_stock INTEGER NOT NULL DEFAULT 0',
+          'ALTER TABLE products ADD COLUMN sellable INTEGER',
+        ]) {
+          await d.execute(a);
+        }
+        await _createV5(d);
+        if (from >= 4) {
+          await d.execute('ALTER TABLE returns ADD COLUMN sync_state INTEGER NOT NULL DEFAULT 0');
+          await d.execute('ALTER TABLE returns ADD COLUMN sync_note TEXT');
+        }
+      }
     });
+  }
+
+  /// Customers synced from the PC (name + credit balance), and the sync state of returns.
+  static Future<void> _createV5(Database d) async {
+    await d.execute('''CREATE TABLE IF NOT EXISTS customers(
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        phone TEXT,
+        balance REAL NOT NULL DEFAULT 0)''');
   }
 
   /// Held invoices, returns and cashier shifts.
@@ -279,7 +335,9 @@ class Db {
         created_at TEXT NOT NULL,
         total REAL NOT NULL,
         payment TEXT NOT NULL,
-        cashier TEXT)''');
+        cashier TEXT,
+        sync_state INTEGER NOT NULL DEFAULT 0,
+        sync_note TEXT)''');
     await d.execute('''CREATE TABLE IF NOT EXISTS return_items(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         return_id INTEGER NOT NULL,
@@ -583,10 +641,10 @@ class Db {
 
   /// Plain products (no extra codes): used by the desktop pull and JSON import.
   static Map<String, Object?> _metaAlways(Product x) =>
-      {'name_ar': x.nameAr, 'units_per_pack': x.unitsPerPack < 1 ? 1 : x.unitsPerPack, 'strip_size': x.stripSize, 'stock': x.stock};
+      {'name_ar': x.nameAr, 'units_per_pack': x.unitsPerPack < 1 ? 1 : x.unitsPerPack, 'strip_size': x.stripSize, 'stock': x.stock, 'expiry': x.expiry, 'min_stock': x.minStock, 'sellable': x.sellable};
 
   static Map<String, Object?> _meta(Product x) => x.hasMeta
-      ? {'name_ar': x.nameAr, 'units_per_pack': x.unitsPerPack, 'strip_size': x.stripSize, 'stock': x.stock}
+      ? {'name_ar': x.nameAr, 'units_per_pack': x.unitsPerPack, 'strip_size': x.stripSize, 'stock': x.stock, 'expiry': x.expiry, 'min_stock': x.minStock, 'sellable': x.sellable}
       : const {};
 
   static Future<int> bulkUpsert(List<Product> items) async =>
@@ -632,6 +690,9 @@ class Db {
               unitsPerPack: xp.unitsPerPack,
               stripSize: xp.stripSize,
               stock: xp.stock,
+              expiry: xp.expiry,
+              minStock: xp.minStock,
+              sellable: xp.sellable,
               hasMeta: xp.hasMeta),
           alts);
     }
@@ -642,7 +703,7 @@ class Db {
       // 2) products
       final existing = <String, Map<String, Object?>>{};
       final norms = <String, int>{};
-      for (final r in await t.query('products', columns: ['id', 'barcode', 'name', 'price', 'name_ar', 'units_per_pack', 'strip_size', 'stock'])) {
+      for (final r in await t.query('products', columns: ['id', 'barcode', 'name', 'price', 'name_ar', 'units_per_pack', 'strip_size', 'stock', 'expiry', 'min_stock', 'sellable'])) {
         final n = Codes.norm(r['barcode'] as String?);
         existing[n] = r;
         existingBefore.add(n);
@@ -669,7 +730,10 @@ class Db {
               (ex['name_ar'] != x.nameAr ||
                   ex['units_per_pack'] != x.unitsPerPack ||
                   ex['strip_size'] != x.stripSize ||
-                  ex['stock'] != x.stock);
+                  ex['stock'] != x.stock ||
+                  (ex['expiry'] ?? '') != x.expiry ||
+                  ex['min_stock'] != x.minStock ||
+                  ex['sellable'] != x.sellable);
           if (mode == ImportMode.newOnly) {
             rep.unchanged++;
           } else if (same && !fixCode && metaChanged) {
@@ -918,11 +982,90 @@ class Db {
     return r.map(Product.fromMap).toList();
   }
 
-  /// Products whose known stock (units) is at or under [threshold].
+  /// Products whose known stock (units) is at or under [threshold], or at or under their reorder level set on the PC.
   static Future<List<Product>> lowStock({int threshold = 5, int limit = 200}) async {
     final d = await db;
-    final r = await d.query('products', where: 'stock IS NOT NULL AND stock<=?', whereArgs: [threshold], orderBy: 'stock, name COLLATE NOCASE', limit: limit);
+    final r = await d.query('products',
+        where: 'stock IS NOT NULL AND (stock<=? OR (min_stock>0 AND stock<=min_stock*units_per_pack))',
+        whereArgs: [threshold],
+        orderBy: 'stock, name COLLATE NOCASE',
+        limit: limit);
     return r.map(Product.fromMap).toList();
+  }
+
+  /// Products with stock on the shelf whose earliest expiry is within [days] days (already expired ones first).
+  static Future<List<Product>> expiringSoon({int days = 90, int limit = 200}) async {
+    final d = await db;
+    final n = DateTime.now().add(Duration(days: days));
+    final lim = '${n.year}-${two(n.month)}-${two(n.day)}';
+    final r = await d.query('products',
+        where: "expiry IS NOT NULL AND expiry<>'' AND expiry<=? AND stock IS NOT NULL AND stock>0", whereArgs: [lim], orderBy: 'expiry, name COLLATE NOCASE', limit: limit);
+    return r.map(Product.fromMap).toList();
+  }
+
+  // ---------------------------------------------------------- customers
+  static Future<void> replaceCustomers(List<dynamic> rows) async {
+    final d = await db;
+    await d.transaction((t) async {
+      await t.delete('customers');
+      final b = t.batch();
+      for (final r in rows) {
+        if (r is! List || r.length < 4 || r[0] is! int) continue;
+        b.insert('customers', {'id': r[0], 'name': '${r[1]}', 'phone': '${r[2]}', 'balance': (r[3] as num).toDouble()}, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+      await b.commit(noResult: true);
+    });
+  }
+
+  static Future<List<({String name, String phone, double balance})>> searchCustomers(String q, {int limit = 5}) async {
+    final d = await db;
+    final s = q.trim();
+    if (s.isEmpty) return [];
+    final r = await d.query('customers', where: 'name LIKE ? OR phone LIKE ?', whereArgs: ['%$s%', '%$s%'], orderBy: 'name COLLATE NOCASE', limit: limit);
+    return [for (final e in r) (name: '${e['name']}', phone: '${e['phone'] ?? ''}', balance: (e['balance'] as num).toDouble())];
+  }
+
+  /// Balance the PC reported for a customer (exact name, case-insensitive), null when unknown.
+  static Future<double?> customerBalance(String name) async {
+    final d = await db;
+    final r = await d.query('customers', where: 'lower(name)=lower(?)', whereArgs: [name.trim()], limit: 1);
+    return r.isEmpty ? null : (r.first['balance'] as num).toDouble();
+  }
+
+  // ------------------------------------------------- returns -> PC
+  /// Returns waiting for the PC. Only those whose sale the PC already has (otherwise it could not find it).
+  static Future<List<Map<String, Object?>>> lanReturns() async {
+    final d = await db;
+    final install = await installId();
+    final device = await getSetting('device_name');
+    final heads = await d.rawQuery(
+        'SELECT r.*, s.receipt_no AS sale_receipt FROM returns r JOIN sales s ON s.id=r.sale_id WHERE r.sync_state=0 AND s.synced=1 ORDER BY r.id');
+    final out = <Map<String, Object?>>[];
+    for (final h in heads) {
+      final items = await d.query('return_items', where: 'return_id=?', whereArgs: [h['id']], orderBy: 'id');
+      if (items.isEmpty) continue;
+      out.add({
+        'client_return_id': '$install-${h['receipt_no']}',
+        'client_sale_id': '$install-${h['sale_receipt']}',
+        'cashier': h['cashier'],
+        'device_name': device,
+        'items': [
+          for (final i in items) {'barcode': i['barcode'], 'qty': i['qty'], 'unit': i['unit']}
+        ],
+      });
+    }
+    return out;
+  }
+
+  static Future<int> unsyncedReturns() async {
+    final d = await db;
+    return Sqflite.firstIntValue(await d.rawQuery('SELECT COUNT(*) FROM returns WHERE sync_state=0')) ?? 0;
+  }
+
+  /// state: 1 = the PC has it, 2 = the PC refused it (see note), 0 = try again.
+  static Future<void> setReturnResult(String receiptNo, int state, {String note = ''}) async {
+    final d = await db;
+    await d.update('returns', {'sync_state': state, 'sync_note': note.isEmpty ? null : note}, where: 'receipt_no=?', whereArgs: [receiptNo]);
   }
 
   static Future<int> stockKnownCount() async {
