@@ -105,6 +105,7 @@ void main() {
       final v1 = await openDatabase(path, version: 1, onCreate: (d, v) async {
         await d.execute('CREATE TABLE products(id INTEGER PRIMARY KEY AUTOINCREMENT, barcode TEXT UNIQUE NOT NULL, name TEXT NOT NULL, price REAL NOT NULL DEFAULT 0, updated_at TEXT)');
         await d.execute('CREATE TABLE settings(k TEXT PRIMARY KEY, v TEXT)');
+        await d.execute('CREATE TABLE sale_items(id INTEGER PRIMARY KEY AUTOINCREMENT, sale_id INTEGER NOT NULL, barcode TEXT NOT NULL, name TEXT NOT NULL, price REAL NOT NULL, qty INTEGER NOT NULL, subtotal REAL NOT NULL)');
         await d.execute('CREATE TABLE sales(id INTEGER PRIMARY KEY AUTOINCREMENT, receipt_no TEXT UNIQUE NOT NULL, created_at TEXT NOT NULL, subtotal REAL NOT NULL, discount REAL NOT NULL DEFAULT 0, net_total REAL NOT NULL, payment TEXT NOT NULL DEFAULT \'Cash\', cashier TEXT, synced INTEGER NOT NULL DEFAULT 0)');
       });
       await v1.insert('products', {'barcode': '٦٢٢١٠٣١٠٠٠٠٢٨ ', 'name': 'Old', 'price': 3});
