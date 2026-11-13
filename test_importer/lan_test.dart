@@ -195,7 +195,7 @@ void main() {
     final rep = await Lan.pullCatalog();
     expect(rep, isNotNull);
     expect(rep!.added, 2);
-    expect(rep.altAdded, 2);
+    expect(rep.altAdded, 1); // 555555 (777777 becomes the primary barcode of the medicine that had none)
     expect(rep.verified, true);
     expect((await Db.byBarcode('555555'))!.name, 'Panadol');
     expect((await Db.byBarcode('777777'))!.name, 'فيتامين');
