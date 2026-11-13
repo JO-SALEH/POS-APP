@@ -1,7 +1,10 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'scan.dart';
 import '../db.dart';
 import '../i18n.dart';
 import '../importer.dart';
+import '../lan.dart';
 import 'import_report.dart';
 import '../services.dart';
 import '../theme.dart';
@@ -14,8 +17,6 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  final _url = TextEditingController();
-  final _key = TextEditingController();
   final _dev = TextEditingController();
   final _user = TextEditingController();
   final _pass = TextEditingController();
@@ -28,8 +29,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _load() async {
-    _url.text = await Db.getSetting('server_url');
-    _key.text = await Db.getSetting('pair_key');
     _dev.text = await Db.getSetting('device_name');
     _user.text = await Db.getSetting('username', 'admin');
     if (mounted) setState(() {});
@@ -37,30 +36,184 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   void dispose() {
-    for (final c in [_url, _key, _dev, _user, _pass]) {
+    for (final c in [_dev, _user, _pass]) {
       c.dispose();
     }
     super.dispose();
-  }
-
-  Future<void> _saveServer() async {
-    await Db.setSetting('server_url', _url.text.trim());
-    await Db.setSetting('pair_key', _key.text.trim());
-    if (_dev.text.trim().isNotEmpty) await Db.setSetting('device_name', _dev.text.trim());
   }
 
   Future<void> _run(Future<void> Function() job) async {
     setState(() => _busy = true);
     try {
       await job();
-    } on SyncException catch (e) {
-      if (mounted) toast(context, tr('sync_fail', [e.message]));
+    } on LanException catch (e) {
+      if (mounted) toast(context, e.message);
     } on ImportException catch (e) {
       if (mounted) toast(context, e.message);
     } catch (e) {
       if (mounted) toast(context, '$e');
     }
     if (mounted) setState(() => _busy = false);
+  }
+
+
+  // ------------------------------------------------------------- PC link
+  Future<void> _scanQr() async {
+    final code = await Navigator.push<String>(context, MaterialPageRoute(builder: (_) => const ScanPage()));
+    if (code == null || !mounted) return;
+    final p = Pairing.parseQr(code);
+    if (p == null) return toast(context, tr('lan_not_qr'));
+    await _run(() async {
+      final name = await Lan.pair(p);
+      if (mounted) toast(context, tr('lan_paired_ok', [name]));
+      unawaited(Lan.tick());
+    });
+  }
+
+  Future<void> _manual() async {
+    final addr = TextEditingController();
+    final code = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        backgroundColor: JC.surface2,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: const BorderSide(color: JC.borderHi)),
+        title: Text(tr('lan_manual'), style: const TextStyle(color: JC.gold, fontWeight: FontWeight.bold)),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(controller: addr, keyboardType: TextInputType.url, textDirection: TextDirection.ltr, style: const TextStyle(color: JC.silver), decoration: InputDecoration(labelText: tr('lan_address'))),
+          const SizedBox(height: 10),
+          TextField(controller: code, textDirection: TextDirection.ltr, style: const TextStyle(color: JC.silver), decoration: InputDecoration(labelText: tr('lan_code'))),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: Text(tr('cancel'), style: const TextStyle(color: JC.muted))),
+          GoldButton(label: tr('lan_connect'), compact: true, onPressed: () => Navigator.pop(c, true)),
+        ],
+      ),
+    );
+    final a = addr.text, t = code.text;
+    addr.dispose();
+    code.dispose();
+    if (ok != true || !mounted) return;
+    final p = Pairing.parseManual(a, t);
+    if (p == null) return toast(context, tr('lan_bad_input'));
+    await _run(() async {
+      final name = await Lan.pair(p);
+      if (mounted) toast(context, tr('lan_paired_ok', [name]));
+      unawaited(Lan.tick());
+    });
+  }
+
+  Future<void> _sendNow() => _run(() async {
+        final r = await Lan.push();
+        if (!mounted) return;
+        toast(context, r.total == 0 ? tr('lan_all_sent') : tr('lan_sent', [r.booked, r.duplicates, r.unmatched, r.failed]));
+        await Lan.tick();
+      });
+
+  Future<void> _pullProducts() => _run(() async {
+        final p = await Lan.load();
+        if (p == null) throw LanException(tr('lan_not_paired'));
+        final rep = await Lan.pullCatalog(force: true);
+        if (mounted && rep != null) await showImportReport(context, rep);
+      });
+
+  Future<void> _find() => _run(() async {
+        final p = await Lan.load();
+        if (p == null) throw LanException(tr('lan_not_paired'));
+        final np = await Lan.findDesktop(p);
+        if (!mounted) return;
+        toast(context, np == null ? tr('lan_not_found') : tr('lan_found', ['${np.ip}:${np.port}']));
+        await Lan.tick();
+      });
+
+  Future<void> _test() => _run(() async {
+        final p = await Lan.load();
+        if (p == null) throw LanException(tr('lan_not_paired'));
+        final name = await Lan.ping(p);
+        if (mounted) toast(context, tr('conn_ok', [name]));
+        await Lan.tick();
+      });
+
+  Widget _lanSection() {
+    return ValueListenableBuilder<LanStatus>(
+      valueListenable: Lan.status,
+      builder: (context, st, _) {
+        final String line;
+        final Color color;
+        if (!st.paired) {
+          line = tr('lan_none');
+          color = JC.muted;
+        } else if (st.busy) {
+          line = tr('lan_syncing');
+          color = JC.gold;
+        } else if (st.online) {
+          line = tr('lan_connected', [st.name ?? 'JO PHARMA']);
+          color = JC.success;
+        } else {
+          line = tr('lan_offline');
+          color = JC.warn;
+        }
+        return _section(tr('lan_title'), [
+          Row(children: [
+            Icon(st.online ? Icons.wifi : Icons.wifi_off, color: color, size: 20),
+            const SizedBox(width: 8),
+            Expanded(child: Text(line, style: TextStyle(color: color, fontWeight: FontWeight.w700))),
+          ]),
+          if (st.paired)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(st.unsynced > 0 ? tr('lan_waiting', [st.unsynced]) : tr('lan_all_sent'),
+                  style: TextStyle(color: st.unsynced > 0 ? JC.warn : JC.silverDim, fontSize: 13)),
+            ),
+          if (st.paired && !st.online && st.error != null)
+            Padding(padding: const EdgeInsets.only(top: 6), child: Text(st.error!, style: const TextStyle(color: JC.muted, fontSize: 12, height: 1.4))),
+          if (!st.paired) Padding(padding: const EdgeInsets.only(top: 6), child: Text(tr('lan_help'), style: const TextStyle(color: JC.muted, fontSize: 12, height: 1.5))),
+          _gap(),
+          SizedBox(width: double.infinity, child: GoldButton(label: tr('lan_scan'), icon: Icons.qr_code_scanner, onPressed: _busy ? null : _scanQr)),
+          _gap(),
+          SizedBox(width: double.infinity, child: GhostButton(label: tr('lan_manual'), icon: Icons.keyboard, onPressed: _busy ? null : _manual)),
+          if (st.paired) ...[
+            _gap(),
+            Row(children: [
+              Expanded(child: GhostButton(label: tr('lan_send_now'), icon: Icons.cloud_upload_outlined, onPressed: _busy ? null : _sendNow)),
+              const SizedBox(width: 8),
+              Expanded(child: GhostButton(label: tr('lan_test'), icon: Icons.wifi_tethering, onPressed: _busy ? null : _test)),
+            ]),
+            _gap(),
+            SizedBox(width: double.infinity, child: GhostButton(label: tr('lan_get_products'), icon: Icons.download, onPressed: _busy ? null : _pullProducts)),
+            _gap(),
+            SizedBox(width: double.infinity, child: GhostButton(label: tr('lan_find'), icon: Icons.search, onPressed: _busy ? null : _find)),
+            _gap(),
+            SizedBox(
+              width: double.infinity,
+              child: GhostButton(
+                label: tr('lan_unpair'),
+                icon: Icons.link_off,
+                color: JC.danger,
+                onPressed: _busy
+                    ? null
+                    : () async {
+                        if (await confirmDialog(context, tr('lan_unpair'), tr('confirm'), tr('cancel'), danger: true)) await Lan.unpair();
+                      },
+              ),
+            ),
+          ],
+          _gap(),
+          TextField(controller: _dev, style: const TextStyle(color: JC.silver), decoration: InputDecoration(labelText: tr('device_name'))),
+          _gap(),
+          SizedBox(
+            width: double.infinity,
+            child: GhostButton(
+              label: tr('save'),
+              onPressed: () async {
+                if (_dev.text.trim().isNotEmpty) await Db.setSetting('device_name', _dev.text.trim());
+                if (mounted) toast(context, tr('lan_device_saved'));
+              },
+            ),
+          ),
+        ]);
+      },
+    );
   }
 
   Future<void> _saveAccount() async {
@@ -102,55 +255,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         ),
       ]),
-      _section(tr('server'), [
-        TextField(
-          controller: _url,
-          keyboardType: TextInputType.url,
-          textDirection: TextDirection.ltr,
-          style: const TextStyle(color: JC.silver),
-          decoration: InputDecoration(labelText: tr('server'), hintText: tr('server_hint')),
-        ),
-        _gap(),
-        TextField(controller: _key, textDirection: TextDirection.ltr, style: const TextStyle(color: JC.silver), decoration: InputDecoration(labelText: tr('pair_key'))),
-        _gap(),
-        TextField(controller: _dev, style: const TextStyle(color: JC.silver), decoration: InputDecoration(labelText: tr('device_name'))),
-        _gap(),
-        Row(children: [
-          Expanded(child: GoldButton(label: tr('save'), compact: true, onPressed: () => _run(() async {
-            await _saveServer();
-            if (mounted) toast(context, tr('saved'));
-          }))),
-          const SizedBox(width: 8),
-          Expanded(
-            child: GhostButton(
-              label: tr('test_conn'),
-              icon: Icons.wifi_tethering,
-              onPressed: _busy
-                  ? null
-                  : () => _run(() async {
-                        await _saveServer();
-                        final name = await SyncService.ping();
-                        if (mounted) toast(context, tr('conn_ok', [name]));
-                      }),
-            ),
-          ),
-        ]),
-        _gap(),
-        SizedBox(
-          width: double.infinity,
-          child: GhostButton(
-            label: tr('pull_products'),
-            icon: Icons.download,
-            onPressed: _busy
-                ? null
-                : () => _run(() async {
-                      await _saveServer();
-                      final n = await SyncService.pullProducts();
-                      if (mounted) toast(context, tr('import_ok', [n]));
-                    }),
-          ),
-        ),
-      ]),
+      _lanSection(),
       _section(tr('import_file'), [
         Text(tr('import_hint'), style: const TextStyle(color: JC.muted, fontSize: 12, height: 1.5)),
         _gap(),

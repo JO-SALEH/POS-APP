@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../db.dart';
 import '../i18n.dart';
+import '../lan.dart';
 import '../services.dart';
 import '../theme.dart';
 import 'home.dart';
@@ -21,7 +23,14 @@ class _SalesScreenState extends State<SalesScreen> {
   @override
   void initState() {
     super.initState();
+    Lan.status.addListener(_load);
     _load();
+  }
+
+  @override
+  void dispose() {
+    Lan.status.removeListener(_load);
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -40,11 +49,12 @@ class _SalesScreenState extends State<SalesScreen> {
   Future<void> _sync() async {
     setState(() => _busy = true);
     try {
-      final r = await SyncService.pushSales();
-      if (mounted) toast(context, r.sent + r.duplicates == 0 ? tr('sync_none') : tr('sync_ok', [r.sent, r.duplicates]));
-    } on SyncException catch (e) {
-      if (mounted) toast(context, tr('sync_fail', [e.message]));
+      final r = await Lan.push();
+      if (mounted) toast(context, r.total == 0 ? tr('lan_all_sent') : tr('lan_sent', [r.booked, r.duplicates, r.unmatched, r.failed]));
+    } on LanException catch (e) {
+      if (mounted) toast(context, e.message);
     }
+    unawaited(Lan.tick());
     if (mounted) setState(() => _busy = false);
     _load();
   }
@@ -75,6 +85,7 @@ class _SalesScreenState extends State<SalesScreen> {
               ]),
             ),
             const Divider(height: 20),
+            if (s.note.isNotEmpty) Padding(padding: const EdgeInsets.only(bottom: 8), child: Text(s.note, style: const TextStyle(color: JC.warn, fontSize: 13, height: 1.4))),
             if (s.discount > 0) Text('${tr('discount')}: ${fmtMoney(s.discount)}', style: const TextStyle(color: JC.warn)),
             Text('${tr('net')}: ${fmtMoney(s.net)} ${tr('currency')}', style: const TextStyle(color: JC.gold, fontWeight: FontWeight.w900, fontSize: 20)),
           ]),
@@ -153,6 +164,7 @@ class _SalesScreenState extends State<SalesScreen> {
                           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                             Text(s.receiptNo, textDirection: TextDirection.ltr, style: const TextStyle(color: JC.silver, fontWeight: FontWeight.w700, fontSize: 13)),
                             Text(s.createdAt, textDirection: TextDirection.ltr, style: const TextStyle(color: JC.muted, fontSize: 11)),
+                            if (s.note.isNotEmpty) Text(s.note, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: JC.warn, fontSize: 11)),
                           ]),
                         ),
                         Text('${fmtMoney(s.net)} ${tr('currency')}', style: const TextStyle(color: JC.gold, fontWeight: FontWeight.w900)),

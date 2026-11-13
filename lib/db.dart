@@ -75,7 +75,9 @@ class SaleHeader {
   final double net;
   final String payment;
   final bool synced;
-  SaleHeader(this.id, this.receiptNo, this.createdAt, this.subtotal, this.discount, this.net, this.payment, this.synced);
+  final String note;
+  SaleHeader(this.id, this.receiptNo, this.createdAt, this.subtotal, this.discount, this.net, this.payment, this.synced,
+      [this.note = '']);
 
   factory SaleHeader.fromMap(Map<String, Object?> m) => SaleHeader(
         m['id'] as int,
@@ -86,13 +88,14 @@ class SaleHeader {
         (m['net_total'] as num).toDouble(),
         m['payment'] as String,
         (m['synced'] as int) == 1,
+        (m['sync_note'] as String?) ?? '',
       );
 }
 
 class Db {
   static Database? _db;
 
-  static const schemaVersion = 2;
+  static const schemaVersion = 3;
 
   static Future<Database> get db async {
     if (_db != null) return _db!;
@@ -136,7 +139,8 @@ class Db {
           net_total REAL NOT NULL,
           payment TEXT NOT NULL DEFAULT 'Cash',
           cashier TEXT,
-          synced INTEGER NOT NULL DEFAULT 0)''');
+          synced INTEGER NOT NULL DEFAULT 0,
+          sync_note TEXT)''');
       await d.execute('''CREATE TABLE sale_items(
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           sale_id INTEGER NOT NULL,
@@ -153,6 +157,9 @@ class Db {
       if (from < 2) {
         await _createCodes(d);
         await _normalizeStored(d);
+      }
+      if (from < 3) {
+        await d.execute('ALTER TABLE sales ADD COLUMN sync_note TEXT');
       }
     });
   }
@@ -613,6 +620,50 @@ class Db {
       'exported_at': fmtDt(DateTime.now()),
       'sales': sales,
     };
+  }
+
+  /// Invoices in the exact shape the desktop receiver (jo_lan.py) takes: POST /sales {"invoices":[...]}.
+  /// The same JSON is what the desktop's "import file" reads, so the offline export works too.
+  static Future<List<Map<String, Object?>>> lanInvoices({bool onlyUnsynced = true}) async {
+    final d = await db;
+    final install = await installId();
+    final device = await getSetting('device_name');
+    final heads = await d.query('sales', where: onlyUnsynced ? 'synced=0' : null, orderBy: 'id');
+    final out = <Map<String, Object?>>[];
+    for (final h in heads) {
+      final items = await d.query('sale_items', where: 'sale_id=?', whereArgs: [h['id']], orderBy: 'id');
+      if (items.isEmpty) continue;
+      out.add({
+        'client_sale_id': '$install-${h['receipt_no']}',
+        'created_at': h['created_at'],
+        'cashier': h['cashier'],
+        'device_name': device,
+        'payment_method': h['payment'],
+        'discount': h['discount'],
+        'items': [
+          for (final i in items) {'barcode': i['barcode'], 'qty': i['qty'], 'unit': 'pack'}
+        ],
+      });
+    }
+    return out;
+  }
+
+  /// Stable random id of this installation (makes every invoice id unique across phones).
+  static Future<String> installId() async {
+    var v = await getSetting('install_id');
+    if (v.isEmpty) {
+      final r = Random.secure();
+      v = List.generate(12, (_) => r.nextInt(16).toRadixString(16)).join();
+      await setSetting('install_id', v);
+    }
+    return v;
+  }
+
+  /// [synced] = the desktop has the invoice (booked, duplicate or waiting for an unknown barcode to be linked).
+  static Future<void> setSyncResult(String receiptNo, {required bool synced, String note = ''}) async {
+    final d = await db;
+    await d.update('sales', {'synced': synced ? 1 : 0, 'sync_note': note.isEmpty ? null : note},
+        where: 'receipt_no=?', whereArgs: [receiptNo]);
   }
 
   static Future<void> markSynced(Iterable<String> receipts) async {

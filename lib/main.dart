@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'db.dart';
 import 'i18n.dart';
+import 'lan.dart';
 import 'screens/home.dart';
 import 'screens/login.dart';
 import 'services.dart';
@@ -19,6 +20,7 @@ Future<void> main() async {
   await Db.db; // opens + creates the local database (fully offline)
   await app.init();
   runApp(const JoApp());
+  Lan.startAuto(); // quiet background sync with the PC (only when paired)
 }
 
 class JoApp extends StatelessWidget {

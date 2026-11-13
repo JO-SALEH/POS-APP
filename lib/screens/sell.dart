@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../db.dart';
 import '../i18n.dart';
+import '../lan.dart';
 import '../services.dart';
 import '../theme.dart';
 import 'home.dart';
@@ -327,6 +328,7 @@ class _CheckoutDialogState extends State<_CheckoutDialog> {
     setState(() => _busy = true);
     await Db.createSale(List.of(app.cart), _d, _pay, app.user);
     app.clearCart();
+    Lan.afterSale(); // sends it to the PC right away when the PC is reachable
     if (mounted) Navigator.pop(context, true);
   }
 

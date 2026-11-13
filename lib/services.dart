@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'db.dart';
@@ -94,104 +93,6 @@ class AppState extends ChangeNotifier {
 
 final app = AppState();
 
-// ================================================================== sync
-class SyncException implements Exception {
-  final String message;
-  SyncException(this.message);
-  @override
-  String toString() => message;
-}
-
-class SyncResult {
-  final int sent;
-  final int duplicates;
-  SyncResult(this.sent, this.duplicates);
-}
-
-class SyncService {
-  static String normalize(String raw) {
-    var s = raw.trim();
-    if (s.isEmpty) return '';
-    if (!s.startsWith('http://') && !s.startsWith('https://')) s = 'http://$s';
-    final noScheme = s.replaceFirst(RegExp(r'^https?://'), '');
-    final hostPart = noScheme.split('/').first;
-    if (!hostPart.contains(':')) {
-      s = s.replaceFirst(hostPart, '$hostPart:8765');
-    }
-    while (s.endsWith('/')) {
-      s = s.substring(0, s.length - 1);
-    }
-    return s;
-  }
-
-  static Future<Map<String, String>> _headers() async => {
-        'Content-Type': 'application/json; charset=utf-8',
-        'X-JO-Key': await Db.getSetting('pair_key'),
-      };
-
-  static Future<String> _base() async {
-    final u = normalize(await Db.getSetting('server_url'));
-    if (u.isEmpty) throw SyncException(L.ar ? 'أدخل عنوان السيرفر في الإعدادات' : 'Set the server address in Settings');
-    return u;
-  }
-
-  static Map<String, dynamic> _decode(http.Response r) {
-    if (r.statusCode == 401 || r.statusCode == 403) {
-      throw SyncException(L.ar ? 'مفتاح الربط غير صحيح' : 'Wrong pairing key');
-    }
-    if (r.statusCode != 200) throw SyncException('HTTP ${r.statusCode}');
-    final j = jsonDecode(utf8.decode(r.bodyBytes));
-    return j is Map<String, dynamic> ? j : <String, dynamic>{};
-  }
-
-  static Future<T> _guard<T>(Future<T> Function() f) async {
-    try {
-      return await f();
-    } on SyncException {
-      rethrow;
-    } on SocketException {
-      throw SyncException(L.ar ? 'تعذر الوصول للسيرفر (تأكد من نفس شبكة الواي فاي)' : 'Cannot reach the server (same Wi-Fi?)');
-    } on http.ClientException catch (e) {
-      throw SyncException(e.message);
-    } on Exception catch (e) {
-      throw SyncException(e.toString().replaceFirst('Exception: ', ''));
-    }
-  }
-
-  /// Returns the desktop's name on success.
-  static Future<String> ping() => _guard(() async {
-        final r = await http
-            .get(Uri.parse('${await _base()}/api/ping'), headers: await _headers())
-            .timeout(const Duration(seconds: 6));
-        final j = _decode(r);
-        return (j['name'] ?? 'JO PHARMA').toString();
-      });
-
-  static Future<SyncResult> pushSales() => _guard(() async {
-        final payload = await Db.buildPayload();
-        final sales = payload['sales'] as List;
-        if (sales.isEmpty) return SyncResult(0, 0);
-        final r = await http
-            .post(Uri.parse('${await _base()}/api/sales'),
-                headers: await _headers(), body: utf8.encode(jsonEncode(payload)))
-            .timeout(const Duration(seconds: 30));
-        final j = _decode(r);
-        final accepted = ((j['accepted'] ?? []) as List).map((e) => e.toString()).toList();
-        final dups = ((j['duplicates'] ?? []) as List).map((e) => e.toString()).toList();
-        await Db.markSynced([...accepted, ...dups]);
-        return SyncResult(accepted.length, dups.length);
-      });
-
-  static Future<int> pullProducts() => _guard(() async {
-        final r = await http
-            .get(Uri.parse('${await _base()}/api/products'), headers: await _headers())
-            .timeout(const Duration(seconds: 60));
-        final j = _decode(r);
-        final list = (j['products'] ?? []) as List;
-        return Db.bulkUpsert(list.map(_productFromJson).whereType<Product>().toList());
-      });
-}
-
 Product? _productFromJson(dynamic e) {
   if (e is! Map) return null;
   final code = (e['barcode'] ?? e['code'] ?? '').toString().trim();
@@ -215,9 +116,9 @@ class Files {
     return '${n.year}${two(n.month)}${two(n.day)}_${two(n.hour)}${two(n.minute)}';
   }
 
-  /// All sales (not only unsynced) as JSON the desktop can import with `jo_mobile_sync.py --import`.
+  /// All sales (not only unsynced) as JSON the desktop can import with the desktop's Mobile receiver > Import file.
   static Future<void> shareJson() async {
-    final payload = await Db.buildPayload(onlyUnsynced: false);
+    final payload = {'invoices': await Db.lanInvoices(onlyUnsynced: false)};
     final f = await _tmp('jo_sales_${_stamp()}.json', utf8.encode(const JsonEncoder.withIndent(' ').convert(payload)));
     await Share.shareXFiles([XFile(f.path, mimeType: 'application/json')], subject: 'JO POS sales');
   }

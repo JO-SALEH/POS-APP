@@ -103,6 +103,48 @@ class Importer {
     }
   }
 
+  /// One medicine of the desktop (database row or LAN catalog row): primary barcode + its extra codes.
+  static void _addMedicine(ParseResult pr, Object? id, Object? barcode, Object? name, Object? nameAr, Object? price,
+      Map<int, List<String>> extra) {
+    pr.rows++;
+    var code = Codes.norm('${barcode ?? ''}');
+    final alts = [...?(id is int ? extra[id] : null)];
+    if (Codes.isJunk(code) && alts.isNotEmpty) code = alts.removeAt(0); // known only by its extra codes
+    var n = '${name ?? ''}'.trim();
+    if (n.isEmpty) n = '${nameAr ?? ''}'.trim();
+    if (Codes.isJunk(code)) {
+      pr.noCode++;
+      return;
+    }
+    if (n.isEmpty) {
+      pr.noName++;
+      return;
+    }
+    final pv = price is num ? price.toDouble() : (double.tryParse('${price ?? ''}'.replaceAll(',', '.')) ?? 0);
+    pr.items.add(ImportItem(Product(barcode: code, name: n, price: pv), alts));
+  }
+
+  /// The JSON of the desktop LAN receiver (GET /catalog): {"rev","cols","rows","codes":[[code, med_id]]}.
+  static ParseResult fromCatalog(Map<String, dynamic> j) {
+    final cols = ((j['cols'] ?? []) as List).map((e) => '$e').toList();
+    final iId = cols.indexOf('id'), iBc = cols.indexOf('barcode'), iName = cols.indexOf('name');
+    final iAr = cols.indexOf('name_ar'), iPrice = cols.indexOf('price');
+    if (iId < 0 || iBc < 0 || iName < 0 || iPrice < 0) throw ImportException(tr('import_db_unknown'));
+    final extra = <int, List<String>>{};
+    for (final c in ((j['codes'] ?? []) as List)) {
+      if (c is List && c.length >= 2 && c[1] is int) {
+        final code = Codes.norm('${c[0]}');
+        if (!Codes.isJunk(code)) (extra[c[1] as int] ??= []).add(code);
+      }
+    }
+    final pr = ParseResult();
+    for (final r in ((j['rows'] ?? []) as List)) {
+      if (r is! List || r.length <= iPrice) continue;
+      _addMedicine(pr, r[iId], r[iBc], r[iName], iAr >= 0 && iAr < r.length ? r[iAr] : '', r[iPrice], extra);
+    }
+    return pr;
+  }
+
   /// JO PHARMA database (medications + item_codes) or a JO POS backup (products + product_codes).
   @visibleForTesting
   static Future<ParseResult> readSqlite(Database src) async {
@@ -130,22 +172,7 @@ class Importer {
             'SELECT id, barcode, name, $arCol, price FROM medications ORDER BY id LIMIT 5000 OFFSET ?', [offset]);
         if (rows.isEmpty) break;
         for (final r in rows) {
-          pr.rows++;
-          final id = r['id'];
-          var code = Codes.norm('${r['barcode'] ?? ''}');
-          final alts = [...?(id is int ? extra[id] : null)];
-          if (Codes.isJunk(code) && alts.isNotEmpty) code = alts.removeAt(0); // a medicine known only by its extra codes
-          var name = '${r['name'] ?? ''}'.trim();
-          if (name.isEmpty) name = '${r['name_ar'] ?? ''}'.trim();
-          if (Codes.isJunk(code)) {
-            pr.noCode++;
-            continue;
-          }
-          if (name.isEmpty) {
-            pr.noName++;
-            continue;
-          }
-          pr.items.add(ImportItem(Product(barcode: code, name: name, price: priceOf(r['price'])), alts));
+          _addMedicine(pr, r['id'], r['barcode'], r['name'], r['name_ar'], r['price'], extra);
         }
         offset += rows.length;
         if (rows.length < 5000) break;
