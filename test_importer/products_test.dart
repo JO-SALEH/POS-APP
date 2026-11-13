@@ -52,9 +52,9 @@ void main() {
 
   group('column detection', () {
     test('title row is found after junk rows and columns are mapped', () {
-      final rows = [
+      final rows = <List<String>>[
         ['Pharmacy stock'],
-        [],
+        <String>[],
         ['الباركود', 'اسم الصنف', 'السعر'],
         ['6221031234567', 'Panadol', '12.5'],
         ['6221031000011', 'Augmentin', '1,234.50'],
