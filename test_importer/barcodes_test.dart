@@ -44,20 +44,22 @@ void main() {
       final pr = Importer.fromRows(Importer.rowsFromXlsx(bytes));
       expect(pr.rows, 8);
       expect(pr.noCode, 1);
-      expect(pr.noName, 1);
+      expect(pr.merged, 1);
+      expect(pr.namedByCode, 1);
       expect(pr.sci, 1);
       await freshDb();
       final rep = await Importer.commit(pr);
-      expect(rep.added, 5);
+      expect(rep.added, 6);
       expect(rep.duplicatesInFile, 1);
       expect(rep.altAdded, 4);
       expect(rep.altConflicts, 1);
-      expect(rep.productsAfter, 5);
+      expect(rep.productsAfter, 6);
       expect(rep.codesAfter, 4);
       expect(rep.verified, true);
-      final dup = await Db.byBarcode('6221031000011');
-      expect(dup!.name, 'Augmentin 1g (dup)');
-      expect(dup.price, 46);
+      final dup = await Db.byBarcode('6221031000011'); // same barcode twice: merged, first row wins
+      expect(dup!.name, 'Augmentin 1g');
+      expect(dup.price, 45);
+      expect((await Db.byBarcode('7000000000001'))!.name, '7000000000001'); // no name -> barcode
       expect((await Db.byBarcode('6221031000028'))!.name, 'أموكسيل');
       expect((await Db.byBarcode('9999'))!.name, 'بنادول 500 مجم');
       expect((await Db.byBarcode('222222'))!.name, 'Multi in cell');

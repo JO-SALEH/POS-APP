@@ -5,6 +5,7 @@ import '../db.dart';
 import '../i18n.dart';
 import '../importer.dart';
 import '../lan.dart';
+import 'import_flow.dart';
 import 'import_report.dart';
 import '../services.dart';
 import '../theme.dart';
@@ -266,10 +267,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             icon: Icons.upload_file,
             onPressed: _busy
                 ? null
-                : () => _run(() async {
-                      final rep = await Files.importProducts();
-                      if (rep != null && mounted) await showImportReport(context, rep);
-                    }),
+                : () => startImport(context),
           ),
         ),
         _gap(),

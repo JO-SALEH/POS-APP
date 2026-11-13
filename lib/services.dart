@@ -1,12 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'db.dart';
 import 'i18n.dart';
-import 'importer.dart';
 
 // =============================================================== app state
 class AppState extends ChangeNotifier {
@@ -93,15 +91,6 @@ class AppState extends ChangeNotifier {
 
 final app = AppState();
 
-Product? _productFromJson(dynamic e) {
-  if (e is! Map) return null;
-  final code = (e['barcode'] ?? e['code'] ?? '').toString().trim();
-  final name = (e['name'] ?? '').toString().trim();
-  final price = double.tryParse((e['price'] ?? '0').toString().replaceAll(',', '.')) ?? 0;
-  if (code.isEmpty || name.isEmpty) return null;
-  return Product(barcode: code, name: name, price: price);
-}
-
 // ============================================================ file helpers
 class Files {
   static Future<File> _tmp(String name, List<int> bytes) async {
@@ -143,6 +132,17 @@ class Files {
     await Share.shareXFiles([XFile(f.path, mimeType: 'text/csv')], subject: 'JO POS sales');
   }
 
+  /// Products + extra barcodes as CSV (opens in Excel; can be imported back, also into another phone).
+  static Future<void> shareProducts() async {
+    final rows = await Db.exportRows();
+    final b = StringBuffer('\uFEFFbarcode,name,price,extra_barcodes\n');
+    for (final r in rows) {
+      b.writeln(r.map(_csv).join(','));
+    }
+    final f = await _tmp('jo_products_${_stamp()}.csv', utf8.encode(b.toString()));
+    await Share.shareXFiles([XFile(f.path, mimeType: 'text/csv')], subject: 'JO POS products');
+  }
+
   static Future<void> shareDb() async {
     final d = await Db.db;
     await d.execute('PRAGMA wal_checkpoint(FULL)');
@@ -151,71 +151,4 @@ class Files {
     await Share.shareXFiles([XFile(f.path)], subject: 'JO POS backup');
   }
 
-  /// Returns the verified import report, or null when the user cancelled.
-  /// Excel (.xlsx), JO PHARMA database (jo_pharmacy.db), JO POS backup, CSV or JSON - detected from the file itself.
-  /// Throws [ImportException] (already translated) when the file cannot be used.
-  static Future<ImportReport?> importProducts() async {
-    final res = await FilePicker.platform.pickFiles(type: FileType.any, withData: false);
-    if (res == null || res.files.isEmpty) return null;
-    final path = res.files.first.path;
-    if (path == null) throw ImportException(tr('import_empty'));
-    return Importer.importPath(path, parseText: parseProducts);
-  }
-
-  @visibleForTesting
-  static ParseResult parseProducts(String text) {
-    final t = text.trimLeft();
-    final out = ParseResult();
-    if (t.startsWith('{') || t.startsWith('[')) {
-      final j = jsonDecode(t);
-      final list = j is List ? j : (j['products'] ?? []) as List;
-      for (final e in list) {
-        out.rows++;
-        final p = _productFromJson(e);
-        if (p == null) {
-          out.noCode++;
-          continue;
-        }
-        final extra = (e is Map ? (e['codes'] ?? e['alt_codes'] ?? e['barcodes']) : null);
-        out.items.add(ImportItem(p, extra is List ? extra.map((x) => '$x').toList() : const []));
-      }
-      return out;
-    }
-    final lines = const LineSplitter().convert(text).where((l) => l.trim().isNotEmpty).toList();
-    if (lines.isEmpty) return out;
-    final first = lines.first;
-    final delim = first.contains('\t') ? '\t' : (first.contains(';') && !first.contains(',') ? ';' : ',');
-    // header names (English / Arabic) pick the columns; without a header it is barcode, name, price
-    return Importer.fromRows(lines.map((l) => _splitCsv(l, delim)).toList());
-  }
-
-  static List<String> _splitCsv(String line, String d) {
-    final out = <String>[];
-    final cur = StringBuffer();
-    var q = false;
-    for (var i = 0; i < line.length; i++) {
-      final ch = line[i];
-      if (q) {
-        if (ch == '"') {
-          if (i + 1 < line.length && line[i + 1] == '"') {
-            cur.write('"');
-            i++;
-          } else {
-            q = false;
-          }
-        } else {
-          cur.write(ch);
-        }
-      } else if (ch == '"') {
-        q = true;
-      } else if (ch == d) {
-        out.add(cur.toString());
-        cur.clear();
-      } else {
-        cur.write(ch);
-      }
-    }
-    out.add(cur.toString());
-    return out;
-  }
 }

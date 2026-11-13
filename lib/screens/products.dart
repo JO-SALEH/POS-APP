@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
+import '../codes.dart';
 import '../db.dart';
 import '../i18n.dart';
-import '../importer.dart';
-import 'import_report.dart';
+import 'import_flow.dart';
 import '../services.dart';
 import '../theme.dart';
 import 'home.dart';
@@ -68,132 +68,346 @@ class ProductsScreen extends StatefulWidget {
 }
 
 class _ProductsScreenState extends State<ProductsScreen> {
+  static const _page = 60;
   final _q = TextEditingController();
+  final _scroll = ScrollController();
   List<Product> _items = [];
+  int _matching = 0;
   int _total = 0;
-  bool _importing = false;
+  bool _busy = false;
+  bool _loadingMore = false;
+  bool _noPrice = false;
+  ProductSort _sort = ProductSort.name;
+  final Set<int> _sel = {};
+  bool _selecting = false;
+  int _gen = 0; // drops answers of outdated searches
 
   @override
   void initState() {
     super.initState();
+    _scroll.addListener(() {
+      if (_scroll.position.pixels > _scroll.position.maxScrollExtent - 400) _more();
+    });
     _load();
   }
 
   @override
   void dispose() {
     _q.dispose();
+    _scroll.dispose();
     super.dispose();
   }
 
-  /// Excel / JO PHARMA database / CSV / JSON -> products.
   Future<void> _import() async {
-    setState(() => _importing = true);
-    try {
-      final rep = await Files.importProducts();
-      if (rep != null && mounted) await showImportReport(context, rep);
-    } on ImportException catch (e) {
-      if (mounted) toast(context, e.message);
-    } catch (e) {
-      if (mounted) toast(context, tr('import_fail', ['$e']));
-    }
-    if (mounted) setState(() => _importing = false);
+    setState(() => _busy = true);
+    await startImport(context);
+    if (mounted) setState(() => _busy = false);
     _load();
   }
 
   Future<void> _load() async {
-    final r = await Db.searchProducts(_q.text, limit: 200);
+    final g = ++_gen;
+    final r = await Db.searchProducts(_q.text, limit: _page, sort: _sort, noPrice: _noPrice);
+    final m = await Db.countMatching(_q.text, noPrice: _noPrice);
     final n = await Db.productCount();
-    if (mounted) setState(() {
+    if (!mounted || g != _gen) return;
+    setState(() {
       _items = r;
+      _matching = m;
       _total = n;
+      if (n == 0) {
+        _sel.clear();
+        _selecting = false;
+      }
     });
   }
 
-  Future<void> _open([Product? p]) async {
+  Future<void> _more() async {
+    if (_loadingMore || _items.length >= _matching) return;
+    _loadingMore = true;
+    final g = _gen;
+    final r = await Db.searchProducts(_q.text, limit: _page, offset: _items.length, sort: _sort, noPrice: _noPrice);
+    if (mounted && g == _gen) setState(() => _items = [..._items, ...r]);
+    _loadingMore = false;
+  }
+
+  Future<void> _open(Product p) async {
     await Navigator.push(context, MaterialPageRoute(builder: (_) => ProductForm(product: p)));
     _load();
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.transparent,
-      floatingActionButton: FloatingActionButton.extended(
-        backgroundColor: JC.gold,
-        foregroundColor: JC.onGold,
-        onPressed: () => _open(),
-        icon: const Icon(Icons.add),
-        label: Text(tr('add_product'), style: const TextStyle(fontWeight: FontWeight.w800)),
+  Future<void> _add() async {
+    await Navigator.push(context, MaterialPageRoute(builder: (_) => const ProductForm()));
+    _load();
+  }
+
+  void _toggle(Product p) {
+    setState(() {
+      _sel.contains(p.id) ? _sel.remove(p.id) : _sel.add(p.id!);
+      if (_sel.isEmpty) _selecting = false;
+    });
+  }
+
+  void _exitSelect() => setState(() {
+        _sel.clear();
+        _selecting = false;
+      });
+
+  Future<void> _selectAll() async {
+    final ids = await Db.idsMatching(_q.text, noPrice: _noPrice);
+    if (mounted) setState(() => _sel..clear()..addAll(ids));
+  }
+
+  Future<void> _deleteSelected() async {
+    final n = _sel.length;
+    if (n == 0) return;
+    if (!await confirmDialog(context, tr('sel_delete_q', [n]), tr('delete'), tr('cancel'), danger: true)) return;
+    setState(() => _busy = true);
+    final done = await Db.deleteProducts(_sel.toList());
+    _exitSelect();
+    if (mounted) {
+      setState(() => _busy = false);
+      toast(context, tr('sel_deleted', [done]));
+    }
+    _load();
+  }
+
+  Future<void> _deleteAll() async {
+    if (_total == 0) return;
+    if (!await confirmDialog(context, tr('del_all_q', [_total]), tr('delete'), tr('cancel'), danger: true)) return;
+    if (!mounted) return;
+    if (!await confirmDialog(context, tr('del_all_q2'), tr('delete'), tr('cancel'), danger: true)) return;
+    setState(() => _busy = true);
+    final done = await Db.deleteAllProducts();
+    _exitSelect();
+    if (mounted) {
+      setState(() => _busy = false);
+      toast(context, tr('sel_deleted', [done]));
+    }
+    _load();
+  }
+
+  Future<void> _adjust() async {
+    final ids = _sel.isNotEmpty ? _sel.toList() : await Db.idsMatching(_q.text, noPrice: _noPrice);
+    if (ids.isEmpty || !mounted) return;
+    final c = TextEditingController();
+    final v = await showDialog<double>(
+      context: context,
+      builder: (d) => AlertDialog(
+        backgroundColor: JC.surface2,
+        title: Text(tr('adjust_price'), style: const TextStyle(color: JC.gold, fontWeight: FontWeight.bold)),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(tr('adjust_q', [ids.length]), style: const TextStyle(color: JC.silverDim)),
+          const SizedBox(height: 10),
+          TextField(
+            controller: c,
+            autofocus: true,
+            textDirection: TextDirection.ltr,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+            style: const TextStyle(color: JC.silver),
+            decoration: const InputDecoration(suffixText: '%'),
+          ),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(d), child: Text(tr('cancel'), style: const TextStyle(color: JC.muted))),
+          TextButton(
+            onPressed: () {
+              final x = double.tryParse(c.text.trim().replaceAll(',', '.'));
+              if (x != null && x > -100 && x != 0) Navigator.pop(d, x);
+            },
+            child: Text(tr('ok'), style: const TextStyle(color: JC.gold)),
+          ),
+        ],
       ),
-      body: Column(children: [
-        PageTitle('${tr('nav_products')}  ($_total)'),
-        if (_importing) const LinearProgressIndicator(color: JC.gold, backgroundColor: JC.surface3),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: Row(children: [
-            Expanded(
-              child: TextField(
-                controller: _q,
-                onChanged: (_) => _load(),
-                style: const TextStyle(color: JC.silver),
-                decoration: InputDecoration(hintText: tr('search_hint'), prefixIcon: const Icon(Icons.search, color: JC.gold)),
-              ),
-            ),
-            IconButton(
-              tooltip: tr('import_file'),
-              icon: const Icon(Icons.upload_file, color: JC.gold, size: 28),
-              onPressed: _importing ? null : _import,
-            ),
-          ]),
-        ),
-        const SizedBox(height: 8),
+    );
+    if (v == null || !mounted) return;
+    final n = await Db.adjustPrices(ids, v);
+    if (mounted) toast(context, tr('adjust_done', [n]));
+    _load();
+  }
+
+  Future<void> _menu(String v) async {
+    switch (v) {
+      case 'import':
+        return _import();
+      case 'export':
+        return Files.shareProducts();
+      case 'adjust':
+        return _adjust();
+      case 'delall':
+        return _deleteAll();
+      case 'nop':
+        setState(() => _noPrice = !_noPrice);
+        return _load();
+      case 'select':
+        return setState(() => _selecting = true);
+    }
+  }
+
+  PopupMenuItem<String> _mi(String v, IconData i, String t, {Color c = JC.silver}) => PopupMenuItem<String>(
+        value: v,
+        child: Row(children: [Icon(i, size: 20, color: c), const SizedBox(width: 10), Flexible(child: Text(t, style: TextStyle(color: c)))]),
+      );
+
+  Widget _topBar() {
+    if (_selecting) {
+      return Container(
+        color: JC.surface2,
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+        child: Row(children: [
+          IconButton(icon: const Icon(Icons.close, color: JC.silver), onPressed: _exitSelect),
+          Expanded(child: Text(tr('sel_count', [_sel.length]), style: const TextStyle(color: JC.gold, fontWeight: FontWeight.w800, fontSize: 16))),
+          TextButton(
+            onPressed: _sel.length >= _matching ? _exitSelect : _selectAll,
+            child: Text(_sel.length >= _matching ? tr('sel_none') : tr('sel_all', [_matching]), style: const TextStyle(color: JC.gold)),
+          ),
+          IconButton(tooltip: tr('adjust_price'), icon: const Icon(Icons.percent, color: JC.gold), onPressed: _sel.isEmpty ? null : _adjust),
+          IconButton(tooltip: tr('sel_delete'), icon: const Icon(Icons.delete_outline, color: JC.danger), onPressed: _sel.isEmpty ? null : _deleteSelected),
+        ]),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: Row(children: [
         Expanded(
-          child: _items.isEmpty
-              ? Center(
-                  child: Column(mainAxisSize: MainAxisSize.min, children: [
-                    Text(tr('no_products'), style: const TextStyle(color: JC.muted)),
-                    const SizedBox(height: 14),
-                    GhostButton(label: tr('import_file'), icon: Icons.upload_file, onPressed: _importing ? null : _import),
-                  ]),
-                )
-              : ListView.separated(
-                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 90),
-                  itemCount: _items.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 8),
-                  itemBuilder: (_, i) {
-                    final p = _items[i];
-                    return JCard(
-                      onTap: () => _open(p),
-                      child: Row(children: [
-                        Expanded(
-                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                            Text(p.name, style: const TextStyle(color: JC.silver, fontWeight: FontWeight.w700)),
-                            const SizedBox(height: 2),
-                            Text(p.barcode, textDirection: TextDirection.ltr, style: const TextStyle(color: JC.muted, fontSize: 11)),
-                          ]),
-                        ),
-                        FutureBuilder<int>(
-                          future: Db.altCount(p.id!),
-                          builder: (c, s) => (s.data ?? 0) == 0
-                              ? const SizedBox.shrink()
-                              : Padding(
-                                  padding: const EdgeInsetsDirectional.only(end: 10),
-                                  child: Chip(
-                                    visualDensity: VisualDensity.compact,
-                                    avatar: const Icon(Icons.compare_arrows, size: 14, color: JC.info),
-                                    label: Text('${s.data}', style: const TextStyle(color: JC.info, fontSize: 12)),
-                                    backgroundColor: JC.surface3,
-                                    side: const BorderSide(color: JC.border),
-                                  ),
-                                ),
-                        ),
-                        Text(fmtMoney(p.price), style: const TextStyle(color: JC.gold, fontWeight: FontWeight.w900, fontSize: 16)),
-                      ]),
-                    );
-                  },
-                ),
+          child: TextField(
+            controller: _q,
+            onChanged: (_) => _load(),
+            style: const TextStyle(color: JC.silver),
+            decoration: InputDecoration(hintText: tr('search_hint'), prefixIcon: const Icon(Icons.search, color: JC.gold)),
+          ),
+        ),
+        PopupMenuButton<ProductSort>(
+          tooltip: tr('sort_by'),
+          color: JC.surface3,
+          icon: const Icon(Icons.sort, color: JC.gold),
+          initialValue: _sort,
+          onSelected: (s) {
+            _sort = s;
+            _load();
+          },
+          itemBuilder: (_) => [
+            for (final e in {
+              ProductSort.name: tr('sort_name'),
+              ProductSort.newest: tr('sort_newest'),
+              ProductSort.priceAsc: tr('sort_price_asc'),
+              ProductSort.priceDesc: tr('sort_price_desc'),
+            }.entries)
+              PopupMenuItem(value: e.key, child: Text(e.value, style: TextStyle(color: e.key == _sort ? JC.gold : JC.silver))),
+          ],
+        ),
+        PopupMenuButton<String>(
+          tooltip: tr('more_menu'),
+          color: JC.surface3,
+          icon: const Icon(Icons.more_vert, color: JC.gold),
+          onSelected: _menu,
+          itemBuilder: (_) => [
+            _mi('select', Icons.checklist, tr('sel_mode')),
+            _mi('nop', _noPrice ? Icons.check_box : Icons.check_box_outline_blank, tr('filter_no_price'), c: _noPrice ? JC.gold : JC.silver),
+            _mi('adjust', Icons.percent, tr('adjust_price')),
+            _mi('import', Icons.upload_file, tr('import_file')),
+            _mi('export', Icons.ios_share, tr('export_products')),
+            _mi('delall', Icons.delete_forever, tr('del_all'), c: JC.danger),
+          ],
         ),
       ]),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      canPop: !_selecting,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _exitSelect();
+      },
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        floatingActionButton: _selecting
+            ? null
+            : FloatingActionButton.extended(
+                backgroundColor: JC.gold,
+                foregroundColor: JC.onGold,
+                onPressed: _add,
+                icon: const Icon(Icons.add),
+                label: Text(tr('add_product'), style: const TextStyle(fontWeight: FontWeight.w800)),
+              ),
+        body: Column(children: [
+          PageTitle('${tr('nav_products')}  ($_total)'),
+          if (_busy) const LinearProgressIndicator(color: JC.gold, backgroundColor: JC.surface3),
+          _topBar(),
+          if (!_selecting && (_noPrice || _q.text.isNotEmpty) && _total > 0)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
+              child: Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: Text(tr('showing', [_items.length, _matching]), style: const TextStyle(color: JC.muted, fontSize: 12)),
+              ),
+            ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: _items.isEmpty
+                ? Center(
+                    child: Column(mainAxisSize: MainAxisSize.min, children: [
+                      Text(tr('no_products'), style: const TextStyle(color: JC.muted)),
+                      const SizedBox(height: 14),
+                      if (_total == 0) GhostButton(label: tr('import_file'), icon: Icons.upload_file, onPressed: _busy ? null : _import),
+                    ]),
+                  )
+                : ListView.separated(
+                    controller: _scroll,
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 90),
+                    itemCount: _items.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                    itemBuilder: (_, i) {
+                      final p = _items[i];
+                      final on = _sel.contains(p.id);
+                      return GestureDetector(
+                        onLongPress: () {
+                          if (!_selecting) setState(() => _selecting = true);
+                          _toggle(p);
+                        },
+                        child: JCard(
+                          borderColor: on ? JC.gold : null,
+                          onTap: () => _selecting ? _toggle(p) : _open(p),
+                          child: Row(children: [
+                            if (_selecting)
+                              Padding(
+                                padding: const EdgeInsetsDirectional.only(end: 10),
+                                child: Icon(on ? Icons.check_circle : Icons.radio_button_unchecked, color: on ? JC.gold : JC.muted),
+                              ),
+                            Expanded(
+                              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                Text(p.name, style: const TextStyle(color: JC.silver, fontWeight: FontWeight.w700)),
+                                const SizedBox(height: 2),
+                                Text(p.barcode, textDirection: TextDirection.ltr, style: const TextStyle(color: JC.muted, fontSize: 11)),
+                              ]),
+                            ),
+                            FutureBuilder<int>(
+                              future: Db.altCount(p.id!),
+                              builder: (c, s) => (s.data ?? 0) == 0
+                                  ? const SizedBox.shrink()
+                                  : Padding(
+                                      padding: const EdgeInsetsDirectional.only(end: 10),
+                                      child: Chip(
+                                        visualDensity: VisualDensity.compact,
+                                        avatar: const Icon(Icons.compare_arrows, size: 14, color: JC.info),
+                                        label: Text('${s.data}', style: const TextStyle(color: JC.info, fontSize: 12)),
+                                        backgroundColor: JC.surface3,
+                                        side: const BorderSide(color: JC.border),
+                                      ),
+                                    ),
+                            ),
+                            Text(fmtMoney(p.price),
+                                style: TextStyle(color: p.price <= 0 ? JC.warn : JC.gold, fontWeight: FontWeight.w900, fontSize: 16)),
+                          ]),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ]),
+      ),
     );
   }
 }
@@ -211,13 +425,18 @@ class _ProductFormState extends State<ProductForm> {
   late final TextEditingController _price =
       TextEditingController(text: widget.product == null ? '' : fmtMoney(widget.product!.price));
   List<Product> _alts = [];
+  final _extra = TextEditingController();
+  late Product? _cur = widget.product;
   String? _err;
 
   @override
   void initState() {
     super.initState();
     final id = widget.product?.id;
-    if (id != null) Db.altsOf(id).then((a) => mounted ? setState(() => _alts = a) : null);
+    if (id != null) {
+      Db.altsOf(id).then((a) => mounted ? setState(() => _alts = a) : null);
+      Db.codesOf(id).then((c) => mounted ? setState(() => _extra.text = c.join('\n')) : null);
+    }
   }
 
   Future<void> _scan() async {
@@ -237,7 +456,7 @@ class _ProductFormState extends State<ProductForm> {
     final pr = double.tryParse(_price.text.trim().replaceAll(',', '.'));
     if (_code.text.trim().isEmpty || _name.text.trim().isEmpty) return setState(() => _err = tr('required'));
     if (pr == null || pr < 0) return setState(() => _err = tr('bad_number'));
-    final p = widget.product ?? Product(barcode: '', name: '', price: 0);
+    final p = _cur ??= Product(barcode: '', name: '', price: 0);
     p.barcode = _code.text.trim();
     p.name = _name.text.trim();
     p.price = pr;
@@ -249,6 +468,11 @@ class _ProductFormState extends State<ProductForm> {
       if (!await Db.updateProduct(p)) return setState(() => _err = tr('dup_barcode'));
     }
     await Db.setAlts(p.id!, _alts.map((e) => e.id!).toList());
+    final refused = await Db.setCodes(p.id!, Codes.splitMany(_extra.text));
+    if (refused.isNotEmpty) {
+      if (mounted) setState(() => _err = tr('codes_refused', [refused.join(', ')]));
+      return;
+    }
     if (mounted) Navigator.pop(context);
   }
 
@@ -288,6 +512,16 @@ class _ProductFormState extends State<ProductForm> {
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             style: const TextStyle(color: JC.silver),
             decoration: InputDecoration(labelText: '${tr('price')} (${tr('currency')})'),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _extra,
+            minLines: 1,
+            maxLines: 5,
+            textDirection: TextDirection.ltr,
+            keyboardType: TextInputType.multiline,
+            style: const TextStyle(color: JC.silver),
+            decoration: InputDecoration(labelText: tr('extra_codes'), helperText: tr('extra_codes_hint'), helperMaxLines: 2),
           ),
           const SizedBox(height: 20),
           Row(children: [

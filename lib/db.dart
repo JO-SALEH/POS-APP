@@ -38,6 +38,19 @@ class ImportItem {
   ImportItem(this.product, [this.altCodes = const []]);
 }
 
+/// Products found in a file, before they are written to the database.
+class ParseResult {
+  final List<ImportItem> items = [];
+  int rows = 0, noCode = 0, noName = 0, other = 0, sci = 0;
+  int merged = 0; // same barcode on several rows: merged into one product
+  int badNumbers = 0; // a price that is not a number (imported with price 0)
+  int noPrice = 0; // products imported with price 0
+  int namedByCode = 0; // no name in the file: the barcode is used as the name
+}
+
+/// How products that already exist are treated by an import.
+enum ImportMode { all, priceOnly, newOnly }
+
 /// What an import really did (shown to the user, and checked by re-reading the database).
 class ImportReport {
   int rows = 0; // records read from the file
@@ -45,6 +58,7 @@ class ImportReport {
   int skippedNoCode = 0, skippedNoName = 0, skippedOther = 0, duplicatesInFile = 0;
   int altAdded = 0, altExisting = 0, altConflicts = 0, altPrimaryWins = 0;
   int sciWarnings = 0; // barcodes that Excel had turned into 1.23E+12
+  int badNumbers = 0, noPrice = 0, namedByCode = 0;
   int mismatches = 0; // verification failures (must be 0)
   int productsAfter = 0, codesAfter = 0;
   final List<String> notes = [];
@@ -52,7 +66,8 @@ class ImportReport {
   int get imported => added + updated + unchanged;
   int get skipped => skippedNoCode + skippedNoName + skippedOther;
   bool get verified => mismatches == 0;
-  bool get hasIssues => skipped > 0 || duplicatesInFile > 0 || altConflicts > 0 || sciWarnings > 0 || mismatches > 0;
+  bool get hasIssues =>
+      skipped > 0 || duplicatesInFile > 0 || altConflicts > 0 || sciWarnings > 0 || mismatches > 0 || badNumbers > 0;
 
   void note(String s) {
     if (notes.length < 30) notes.add(s);
@@ -91,6 +106,8 @@ class SaleHeader {
         (m['sync_note'] as String?) ?? '',
       );
 }
+
+enum ProductSort { name, newest, priceAsc, priceDesc }
 
 class Db {
   static Database? _db;
@@ -222,17 +239,131 @@ class Db {
   }
 
   // ---------------------------------------------------------------- products
-  static Future<List<Product>> searchProducts(String q, {int limit = 60}) async {
-    final d = await db;
+  static (String where, List<Object?> args) _filter(String q, bool noPrice) {
     final s = Codes.latinDigits(q.trim());
-    final rows = s.isEmpty
-        ? await d.query('products', orderBy: 'name COLLATE NOCASE', limit: limit)
-        : await d.query('products',
-            where: 'name LIKE ? OR barcode LIKE ? OR id IN (SELECT product_id FROM product_codes WHERE code LIKE ?)',
-            whereArgs: ['%$s%', '%$s%', '%${s.toUpperCase()}%'],
-            orderBy: 'name COLLATE NOCASE',
-            limit: limit);
+    final w = <String>[];
+    final a = <Object?>[];
+    if (s.isNotEmpty) {
+      w.add('(name LIKE ? OR barcode LIKE ? OR id IN (SELECT product_id FROM product_codes WHERE code LIKE ?))');
+      a.addAll(['%$s%', '%$s%', '%${s.toUpperCase()}%']);
+    }
+    if (noPrice) w.add('price<=0');
+    return (w.isEmpty ? '1=1' : w.join(' AND '), a);
+  }
+
+  static String _order(ProductSort sort) => switch (sort) {
+        ProductSort.name => 'name COLLATE NOCASE',
+        ProductSort.newest => 'id DESC',
+        ProductSort.priceAsc => 'price ASC, name COLLATE NOCASE',
+        ProductSort.priceDesc => 'price DESC, name COLLATE NOCASE',
+      };
+
+  static Future<List<Product>> searchProducts(String q,
+      {int limit = 60, int offset = 0, ProductSort sort = ProductSort.name, bool noPrice = false}) async {
+    final d = await db;
+    final f = _filter(q, noPrice);
+    final rows = await d.query('products', where: f.$1, whereArgs: f.$2, orderBy: _order(sort), limit: limit, offset: offset);
     return rows.map(Product.fromMap).toList();
+  }
+
+  /// Number of products matching the search / filter (the list shows them page by page).
+  static Future<int> countMatching(String q, {bool noPrice = false}) async {
+    final d = await db;
+    final f = _filter(q, noPrice);
+    return Sqflite.firstIntValue(await d.rawQuery('SELECT COUNT(*) FROM products WHERE ${f.$1}', f.$2)) ?? 0;
+  }
+
+  /// Ids of EVERY product matching the search / filter (for "select all").
+  static Future<List<int>> idsMatching(String q, {bool noPrice = false}) async {
+    final d = await db;
+    final f = _filter(q, noPrice);
+    final r = await d.query('products', columns: ['id'], where: f.$1, whereArgs: f.$2);
+    return r.map((e) => e['id'] as int).toList();
+  }
+
+  /// Deletes the products with their extra barcodes and alternative links (past sales keep their own copy of name/price).
+  static Future<int> deleteProducts(Iterable<int> ids) async {
+    final d = await db;
+    final all = ids.toList();
+    var n = 0;
+    await d.transaction((t) async {
+      for (var i = 0; i < all.length; i += 400) {
+        final chunk = all.sublist(i, i + 400 > all.length ? all.length : i + 400);
+        final q = List.filled(chunk.length, '?').join(',');
+        await t.delete('alternatives', where: 'product_id IN ($q) OR alt_id IN ($q)', whereArgs: [...chunk, ...chunk]);
+        await t.delete('product_codes', where: 'product_id IN ($q)', whereArgs: chunk);
+        n += await t.delete('products', where: 'id IN ($q)', whereArgs: chunk);
+      }
+    });
+    return n;
+  }
+
+  static Future<int> deleteAllProducts() async {
+    final d = await db;
+    var n = 0;
+    await d.transaction((t) async {
+      await t.delete('alternatives');
+      await t.delete('product_codes');
+      n = await t.delete('products');
+    });
+    return n;
+  }
+
+  /// Raises (+) or lowers (-) the price of the given products by [percent], rounded to 2 decimals (never below 0).
+  static Future<int> adjustPrices(Iterable<int> ids, double percent) async {
+    final d = await db;
+    final all = ids.toList();
+    final f = 1 + percent / 100;
+    var n = 0;
+    final now = fmtDt(DateTime.now());
+    await d.transaction((t) async {
+      for (var i = 0; i < all.length; i += 400) {
+        final chunk = all.sublist(i, i + 400 > all.length ? all.length : i + 400);
+        final q = List.filled(chunk.length, '?').join(',');
+        n += await t.rawUpdate(
+            'UPDATE products SET price=MAX(0, ROUND(price*?, 2)), updated_at=? WHERE id IN ($q)', [f, now, ...chunk]);
+      }
+    });
+    return n;
+  }
+
+  /// Replaces the extra barcodes of a product. Codes that belong to ANOTHER product are refused and returned.
+  static Future<List<String>> setCodes(int productId, List<String> codes) async {
+    final d = await db;
+    final refused = <String>[];
+    await d.transaction((t) async {
+      final own = await t.query('products', columns: ['barcode'], where: 'id=?', whereArgs: [productId]);
+      final primary = own.isEmpty ? '' : Codes.norm(own.first['barcode'] as String?);
+      await t.delete('product_codes', where: 'product_id=?', whereArgs: [productId]);
+      for (final raw in codes.map(Codes.norm).toSet()) {
+        if (raw == primary || Codes.isJunk(raw)) continue;
+        if (await _codeTaken(t, raw, exceptProduct: productId)) {
+          refused.add(raw);
+          continue;
+        }
+        await t.insert('product_codes', {'code': raw, 'product_id': productId}, conflictAlgorithm: ConflictAlgorithm.ignore);
+      }
+    });
+    return refused;
+  }
+
+  /// All products with their extra barcodes, for the CSV export.
+  static Future<List<List<String>>> exportRows() async {
+    final d = await db;
+    final extra = <int, List<String>>{};
+    for (final r in await d.query('product_codes', orderBy: 'code')) {
+      (extra[r['product_id'] as int] ??= []).add(r['code'] as String);
+    }
+    final out = <List<String>>[];
+    for (final r in await d.query('products', orderBy: 'name COLLATE NOCASE')) {
+      out.add([
+        r['barcode'] as String,
+        r['name'] as String,
+        fmtMoney((r['price'] as num).toDouble()),
+        (extra[r['id'] as int] ?? const []).join(' | '),
+      ]);
+    }
+    return out;
   }
 
   /// Finds a product from a scanned / typed code: primary barcode, then extra barcodes,
@@ -339,7 +470,8 @@ class Db {
   ///  * the same barcode twice in the file: the last row wins (counted in the report);
   ///  * an extra code that is another product's primary / extra code is NOT taken (counted as a conflict);
   ///  * when a code becomes a product's primary barcode it stops being an extra code of another product.
-  static Future<ImportReport> importBatch(List<ImportItem> items, {ImportReport? into}) async {
+  static Future<ImportReport> importBatch(List<ImportItem> items,
+      {ImportReport? into, ImportMode mode = ImportMode.all}) async {
     final d = await db;
     final rep = into ?? ImportReport();
     if (rep.rows == 0) rep.rows = items.length;
@@ -367,6 +499,7 @@ class Db {
     }
 
     final expectedAlts = <String, String>{}; // extra code -> its primary
+    final existingBefore = <String>{};
     await d.transaction((t) async {
       // 2) products
       final existing = <String, Map<String, Object?>>{};
@@ -374,6 +507,7 @@ class Db {
       for (final r in await t.query('products', columns: ['id', 'barcode', 'name', 'price'])) {
         final n = Codes.norm(r['barcode'] as String?);
         existing[n] = r;
+        existingBefore.add(n);
         norms[n] = (norms[n] ?? 0) + 1;
       }
       final now = fmtDt(DateTime.now());
@@ -386,17 +520,22 @@ class Db {
               conflictAlgorithm: ConflictAlgorithm.ignore);
           rep.added++;
         } else {
-          final same = ex['name'] == x.name && ((ex['price'] as num).toDouble() - x.price).abs() < 0.0005;
+          final oldPrice = (ex['price'] as num).toDouble();
+          // a price of 0 in the file means "not given": it never wipes a price the product already has
+          final newPrice = x.price > 0 ? x.price : oldPrice;
+          // a name that is only the barcode (file had no name) never replaces a real name
+          final newName = (mode == ImportMode.all && x.name != e.key) ? x.name : '${ex['name']}';
+          final same = ex['name'] == newName && (oldPrice - newPrice).abs() < 0.0005;
           final fixCode = ex['barcode'] != e.key && norms[e.key] == 1;
-          if (same && !fixCode) {
+          if (mode == ImportMode.newOnly || (same && !fixCode)) {
             rep.unchanged++;
           } else {
             b.update(
                 'products',
                 {
                   if (fixCode) 'barcode': e.key,
-                  'name': x.name,
-                  'price': x.price,
+                  'name': newName,
+                  'price': newPrice,
                   'updated_at': now,
                 },
                 where: 'id=?',
@@ -471,8 +610,12 @@ class Db {
     final idByCode = {for (final e in stored.entries) e.key: e.value['id'] as int};
     for (final e in byCode.entries) {
       final r = stored[e.key];
-      if (r == null || r['name'] != e.value.product.name ||
-          ((r['price'] as num).toDouble() - e.value.product.price).abs() >= 0.0005) {
+      final wasThere = existingBefore.contains(e.key);
+      final checkName = !wasThere || (mode == ImportMode.all && e.value.product.name != e.key);
+      final checkPrice = (mode != ImportMode.newOnly || !wasThere) && e.value.product.price > 0;
+      if (r == null ||
+          (checkName && r['name'] != e.value.product.name) ||
+          (checkPrice && ((r['price'] as num).toDouble() - e.value.product.price).abs() >= 0.0005)) {
         rep.mismatches++;
         rep.note('verify failed: ${e.key}');
       }
