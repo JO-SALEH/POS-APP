@@ -21,14 +21,47 @@ class Product {
   String barcode;
   String name;
   double price;
-  Product({this.id, required this.barcode, required this.name, required this.price});
+  String nameAr;
+  int unitsPerPack; // tablets (units) in one pack
+  int stripSize; // units in one strip (0 = not sold by strip)
+  int? stock; // stock in units, null = unknown (not synced from the PC yet)
+  bool hasMeta; // true when nameAr / pack size / stock came from the PC or a database and must be saved
+  Product({
+    this.id,
+    required this.barcode,
+    required this.name,
+    required this.price,
+    this.nameAr = '',
+    this.unitsPerPack = 1,
+    this.stripSize = 0,
+    this.stock,
+    this.hasMeta = false,
+  });
 
   factory Product.fromMap(Map<String, Object?> m) => Product(
         id: m['id'] as int?,
         barcode: m['barcode'] as String,
         name: m['name'] as String,
         price: (m['price'] as num).toDouble(),
+        nameAr: (m['name_ar'] as String?) ?? '',
+        unitsPerPack: ((m['units_per_pack'] as num?)?.toInt() ?? 1).clamp(1, 100000),
+        stripSize: (m['strip_size'] as num?)?.toInt() ?? 0,
+        stock: (m['stock'] as num?)?.toInt(),
       );
+
+  /// Ways this product can be sold, like the desktop: pack always; strip when a strip size is set; single unit when a pack has several.
+  List<String> get unitOptions {
+    final o = ['pack'];
+    if (stripSize > 0 && stripSize < unitsPerPack) o.add('strip');
+    if (unitsPerPack > 1) o.add('unit');
+    return o;
+  }
+
+  /// Units (tablets) taken from stock by ONE sold [unit].
+  int multOf(String unit) => unit == 'pack' ? unitsPerPack : (unit == 'strip' ? (stripSize > 0 ? stripSize : unitsPerPack) : 1);
+
+  /// Same formula as the desktop (jo_lan._line_for): price * mult / units_per_pack, 2 decimals.
+  double priceFor(String unit) => unit == 'pack' ? double.parse(price.toStringAsFixed(2)) : double.parse((price * multOf(unit) / unitsPerPack).toStringAsFixed(2));
 }
 
 /// One product read from a file / database, with its extra barcodes.
@@ -77,8 +110,12 @@ class ImportReport {
 class CartLine {
   Product product;
   int qty;
-  CartLine(this.product, [this.qty = 1]);
-  double get subtotal => product.price * qty;
+  String unit; // pack | strip | unit
+  CartLine(this.product, [this.qty = 1, this.unit = 'pack']);
+  double get price => product.priceFor(unit);
+  double get subtotal => double.parse((price * qty).toStringAsFixed(2));
+  int get baseUnits => qty * product.multOf(unit);
+  CartLine copy() => CartLine(product, qty, unit);
 }
 
 class SaleHeader {
@@ -91,8 +128,12 @@ class SaleHeader {
   final String payment;
   final bool synced;
   final String note;
+  final String customer;
+  final double tax;
+  final double received;
+  final String cashier;
   SaleHeader(this.id, this.receiptNo, this.createdAt, this.subtotal, this.discount, this.net, this.payment, this.synced,
-      [this.note = '']);
+      [this.note = '', this.customer = '', this.tax = 0, this.received = 0, this.cashier = '']);
 
   factory SaleHeader.fromMap(Map<String, Object?> m) => SaleHeader(
         m['id'] as int,
@@ -104,7 +145,24 @@ class SaleHeader {
         m['payment'] as String,
         (m['synced'] as int) == 1,
         (m['sync_note'] as String?) ?? '',
+        (m['customer'] as String?) ?? '',
+        (m['tax'] as num?)?.toDouble() ?? 0,
+        (m['received'] as num?)?.toDouble() ?? 0,
+        (m['cashier'] as String?) ?? '',
       );
+}
+
+/// Numbers of a day / shift for the dashboard.
+class DayReport {
+  int count = 0;
+  double sales = 0;
+  double discounts = 0;
+  int returnsCount = 0;
+  double returns = 0;
+  final Map<String, double> byPayment = {};
+  final Map<String, double> returnsByPayment = {};
+  final List<({String name, int qty, double total})> top = [];
+  double get net => sales - returns;
 }
 
 enum ProductSort { name, newest, priceAsc, priceDesc }
@@ -112,7 +170,7 @@ enum ProductSort { name, newest, priceAsc, priceDesc }
 class Db {
   static Database? _db;
 
-  static const schemaVersion = 3;
+  static const schemaVersion = 4;
 
   static Future<Database> get db async {
     if (_db != null) return _db!;
@@ -142,7 +200,11 @@ class Db {
           barcode TEXT UNIQUE NOT NULL,
           name TEXT NOT NULL,
           price REAL NOT NULL DEFAULT 0,
-          updated_at TEXT)''');
+          updated_at TEXT,
+          name_ar TEXT,
+          units_per_pack INTEGER NOT NULL DEFAULT 1,
+          strip_size INTEGER NOT NULL DEFAULT 0,
+          stock INTEGER)''');
       await d.execute('''CREATE TABLE alternatives(
           product_id INTEGER NOT NULL,
           alt_id INTEGER NOT NULL,
@@ -157,7 +219,10 @@ class Db {
           payment TEXT NOT NULL DEFAULT 'Cash',
           cashier TEXT,
           synced INTEGER NOT NULL DEFAULT 0,
-          sync_note TEXT)''');
+          sync_note TEXT,
+          customer TEXT,
+          tax REAL NOT NULL DEFAULT 0,
+          received REAL NOT NULL DEFAULT 0)''');
       await d.execute('''CREATE TABLE sale_items(
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           sale_id INTEGER NOT NULL,
@@ -165,11 +230,14 @@ class Db {
           name TEXT NOT NULL,
           price REAL NOT NULL,
           qty INTEGER NOT NULL,
-          subtotal REAL NOT NULL)''');
+          subtotal REAL NOT NULL,
+          unit TEXT NOT NULL DEFAULT 'pack',
+          base_units INTEGER NOT NULL DEFAULT 0)''');
       await d.execute('CREATE TABLE settings(k TEXT PRIMARY KEY, v TEXT)');
       await d.execute('CREATE INDEX idx_sale_items_sale ON sale_items(sale_id)');
       await d.execute('CREATE INDEX idx_sales_synced ON sales(synced)');
       await _createCodes(d);
+      await _createV4(d);
     }, onUpgrade: (d, from, to) async {
       if (from < 2) {
         await _createCodes(d);
@@ -178,7 +246,59 @@ class Db {
       if (from < 3) {
         await d.execute('ALTER TABLE sales ADD COLUMN sync_note TEXT');
       }
+      if (from < 4) {
+        for (final a in const [
+          'ALTER TABLE products ADD COLUMN name_ar TEXT',
+          'ALTER TABLE products ADD COLUMN units_per_pack INTEGER NOT NULL DEFAULT 1',
+          'ALTER TABLE products ADD COLUMN strip_size INTEGER NOT NULL DEFAULT 0',
+          'ALTER TABLE products ADD COLUMN stock INTEGER',
+          'ALTER TABLE sales ADD COLUMN customer TEXT',
+          'ALTER TABLE sales ADD COLUMN tax REAL NOT NULL DEFAULT 0',
+          'ALTER TABLE sales ADD COLUMN received REAL NOT NULL DEFAULT 0',
+          "ALTER TABLE sale_items ADD COLUMN unit TEXT NOT NULL DEFAULT 'pack'",
+          'ALTER TABLE sale_items ADD COLUMN base_units INTEGER NOT NULL DEFAULT 0',
+        ]) {
+          await d.execute(a);
+        }
+        await _createV4(d);
+      }
     });
+  }
+
+  /// Held invoices, returns and cashier shifts.
+  static Future<void> _createV4(Database d) async {
+    await d.execute('''CREATE TABLE IF NOT EXISTS held(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        label TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        cart_json TEXT NOT NULL)''');
+    await d.execute('''CREATE TABLE IF NOT EXISTS returns(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        receipt_no TEXT UNIQUE NOT NULL,
+        sale_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        total REAL NOT NULL,
+        payment TEXT NOT NULL,
+        cashier TEXT)''');
+    await d.execute('''CREATE TABLE IF NOT EXISTS return_items(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        return_id INTEGER NOT NULL,
+        sale_item_id INTEGER NOT NULL,
+        barcode TEXT NOT NULL,
+        name TEXT NOT NULL,
+        unit TEXT NOT NULL,
+        qty INTEGER NOT NULL,
+        price REAL NOT NULL,
+        subtotal REAL NOT NULL,
+        base_units INTEGER NOT NULL DEFAULT 0)''');
+    await d.execute('''CREATE TABLE IF NOT EXISTS shifts(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        opened_at TEXT NOT NULL,
+        closed_at TEXT,
+        opening REAL NOT NULL DEFAULT 0,
+        expected REAL,
+        counted REAL,
+        cashier TEXT)''');
   }
 
   /// Extra barcodes of a product (desktop item_codes, extra Excel columns). The primary barcode stays in products.
@@ -244,8 +364,8 @@ class Db {
     final w = <String>[];
     final a = <Object?>[];
     if (s.isNotEmpty) {
-      w.add('(name LIKE ? OR barcode LIKE ? OR id IN (SELECT product_id FROM product_codes WHERE code LIKE ?))');
-      a.addAll(['%$s%', '%$s%', '%${s.toUpperCase()}%']);
+      w.add('(name LIKE ? OR name_ar LIKE ? OR barcode LIKE ? OR id IN (SELECT product_id FROM product_codes WHERE code LIKE ?))');
+      a.addAll(['%$s%', '%$s%', '%$s%', '%${s.toUpperCase()}%']);
     }
     if (noPrice) w.add('price<=0');
     return (w.isEmpty ? '1=1' : w.join(' AND '), a);
@@ -426,7 +546,7 @@ class Db {
     if (Codes.isJunk(code) || await _codeTaken(d, code)) return null;
     try {
       return await d.insert('products',
-          {'barcode': code, 'name': x.name.trim(), 'price': x.price, 'updated_at': fmtDt(DateTime.now())});
+          {'barcode': code, 'name': x.name.trim(), 'price': x.price, 'updated_at': fmtDt(DateTime.now()), ..._metaAlways(x)});
     } on DatabaseException catch (e) {
       if (e.isUniqueConstraintError()) return null;
       rethrow;
@@ -441,7 +561,7 @@ class Db {
     try {
       await d.transaction((t) async {
         await t.update('products',
-            {'barcode': code, 'name': x.name.trim(), 'price': x.price, 'updated_at': fmtDt(DateTime.now())},
+            {'barcode': code, 'name': x.name.trim(), 'price': x.price, 'updated_at': fmtDt(DateTime.now()), ..._metaAlways(x)},
             where: 'id=?', whereArgs: [x.id]);
         await t.delete('product_codes', where: 'code=?', whereArgs: [code]); // now it is the primary
       });
@@ -462,6 +582,13 @@ class Db {
   }
 
   /// Plain products (no extra codes): used by the desktop pull and JSON import.
+  static Map<String, Object?> _metaAlways(Product x) =>
+      {'name_ar': x.nameAr, 'units_per_pack': x.unitsPerPack < 1 ? 1 : x.unitsPerPack, 'strip_size': x.stripSize, 'stock': x.stock};
+
+  static Map<String, Object?> _meta(Product x) => x.hasMeta
+      ? {'name_ar': x.nameAr, 'units_per_pack': x.unitsPerPack, 'strip_size': x.stripSize, 'stock': x.stock}
+      : const {};
+
   static Future<int> bulkUpsert(List<Product> items) async =>
       (await importBatch(items.map((e) => ImportItem(e)).toList())).imported;
 
@@ -495,7 +622,18 @@ class Db {
         rep.note('dup $code: ${prev.product.name} -> $name');
       }
       final alts = <String>{...?prev?.altCodes, ...it.altCodes}.toList();
-      byCode[code] = ImportItem(Product(barcode: code, name: name, price: it.product.price), alts);
+      final xp = it.product;
+      byCode[code] = ImportItem(
+          Product(
+              barcode: code,
+              name: name,
+              price: xp.price,
+              nameAr: xp.nameAr,
+              unitsPerPack: xp.unitsPerPack,
+              stripSize: xp.stripSize,
+              stock: xp.stock,
+              hasMeta: xp.hasMeta),
+          alts);
     }
 
     final expectedAlts = <String, String>{}; // extra code -> its primary
@@ -504,7 +642,7 @@ class Db {
       // 2) products
       final existing = <String, Map<String, Object?>>{};
       final norms = <String, int>{};
-      for (final r in await t.query('products', columns: ['id', 'barcode', 'name', 'price'])) {
+      for (final r in await t.query('products', columns: ['id', 'barcode', 'name', 'price', 'name_ar', 'units_per_pack', 'strip_size', 'stock'])) {
         final n = Codes.norm(r['barcode'] as String?);
         existing[n] = r;
         existingBefore.add(n);
@@ -516,7 +654,7 @@ class Db {
         final ex = existing[e.key];
         final x = e.value.product;
         if (ex == null) {
-          b.insert('products', {'barcode': e.key, 'name': x.name, 'price': x.price, 'updated_at': now},
+          b.insert('products', {'barcode': e.key, 'name': x.name, 'price': x.price, 'updated_at': now, ..._meta(x)},
               conflictAlgorithm: ConflictAlgorithm.ignore);
           rep.added++;
         } else {
@@ -527,7 +665,17 @@ class Db {
           final newName = (mode == ImportMode.all && x.name != e.key) ? x.name : '${ex['name']}';
           final same = ex['name'] == newName && (oldPrice - newPrice).abs() < 0.0005;
           final fixCode = ex['barcode'] != e.key && norms[e.key] == 1;
-          if (mode == ImportMode.newOnly || (same && !fixCode)) {
+          final metaChanged = x.hasMeta &&
+              (ex['name_ar'] != x.nameAr ||
+                  ex['units_per_pack'] != x.unitsPerPack ||
+                  ex['strip_size'] != x.stripSize ||
+                  ex['stock'] != x.stock);
+          if (mode == ImportMode.newOnly) {
+            rep.unchanged++;
+          } else if (same && !fixCode && metaChanged) {
+            b.update('products', _meta(x), where: 'id=?', whereArgs: [ex['id']]); // stock / pack size only: not a "change" for the report
+            rep.unchanged++;
+          } else if (same && !fixCode) {
             rep.unchanged++;
           } else {
             b.update(
@@ -537,6 +685,7 @@ class Db {
                   'name': newName,
                   'price': newPrice,
                   'updated_at': now,
+                  ..._meta(x),
                 },
                 where: 'id=?',
                 whereArgs: [ex['id']]);
@@ -664,13 +813,15 @@ class Db {
   }
 
   // ------------------------------------------------------------------- sales
-  static Future<String> createSale(List<CartLine> lines, double discount, String payment, String cashier) async {
+  static Future<String> createSale(List<CartLine> lines, double discount, String payment, String cashier,
+      {String customer = '', double received = 0, double tax = 0}) async {
     final d = await db;
     final devId = await getSetting('device_id', 'DEV');
     final now = DateTime.now();
     final prefix = 'MB-$devId-${two(now.year % 100)}${two(now.month)}${two(now.day)}-';
-    final subtotal = lines.fold<double>(0, (a, l) => a + l.subtotal);
+    final subtotal = double.parse(lines.fold<double>(0, (a, l) => a + l.subtotal).toStringAsFixed(2));
     final disc = discount.clamp(0, subtotal).toDouble();
+    final taxAmt = double.parse(tax.clamp(0, 1e9).toStringAsFixed(2));
     late String receipt;
     await d.transaction((t) async {
       var n = (Sqflite.firstIntValue(
@@ -686,23 +837,233 @@ class Db {
         'created_at': fmtDt(now),
         'subtotal': subtotal,
         'discount': disc,
-        'net_total': subtotal - disc,
+        'net_total': double.parse((subtotal - disc + taxAmt).toStringAsFixed(2)),
         'payment': payment,
         'cashier': cashier,
         'synced': 0,
+        'customer': customer.trim().isEmpty ? null : customer.trim(),
+        'tax': taxAmt,
+        'received': received,
       });
       for (final l in lines) {
         await t.insert('sale_items', {
           'sale_id': id,
           'barcode': l.product.barcode,
           'name': l.product.name,
-          'price': l.product.price,
+          'price': l.price,
           'qty': l.qty,
           'subtotal': l.subtotal,
+          'unit': l.unit,
+          'base_units': l.baseUnits,
         });
+        // keeps the shelf count honest until the next refresh from the PC
+        await t.rawUpdate('UPDATE products SET stock=MAX(0, stock-?) WHERE barcode=? AND stock IS NOT NULL',
+            [l.baseUnits, l.product.barcode]);
       }
     });
     return receipt;
+  }
+
+  // ------------------------------------------------------- held invoices
+  static Future<int> holdCart(List<CartLine> lines, String label) async {
+    final d = await db;
+    final json = jsonEncode([
+      for (final l in lines) {'barcode': l.product.barcode, 'qty': l.qty, 'unit': l.unit}
+    ]);
+    return d.insert('held', {'label': label.trim().isEmpty ? fmtDt(DateTime.now()).substring(11, 16) : label.trim(), 'created_at': fmtDt(DateTime.now()), 'cart_json': json});
+  }
+
+  static Future<List<Map<String, Object?>>> heldList() async {
+    final d = await db;
+    final r = await d.query('held', orderBy: 'id DESC');
+    return [
+      for (final h in r)
+        {
+          'id': h['id'],
+          'label': h['label'],
+          'created_at': h['created_at'],
+          'count': (jsonDecode(h['cart_json'] as String) as List).length,
+        }
+    ];
+  }
+
+  /// Lines of a held invoice with the CURRENT product data (a product deleted meanwhile is skipped).
+  static Future<List<CartLine>> takeHeld(int id) async {
+    final d = await db;
+    final r = await d.query('held', where: 'id=?', whereArgs: [id]);
+    if (r.isEmpty) return [];
+    final out = <CartLine>[];
+    for (final e in (jsonDecode(r.first['cart_json'] as String) as List)) {
+      final p = await byBarcode('${e['barcode']}');
+      if (p == null) continue;
+      final unit = '${e['unit']}';
+      out.add(CartLine(p, (e['qty'] as num).toInt(), p.unitOptions.contains(unit) ? unit : 'pack'));
+    }
+    await d.delete('held', where: 'id=?', whereArgs: [id]);
+    return out;
+  }
+
+  static Future<void> deleteHeld(int id) async {
+    final d = await db;
+    await d.delete('held', where: 'id=?', whereArgs: [id]);
+  }
+
+  // ------------------------------------------------------- quick access / reports
+  /// Best sellers (by sold units): the "fast items" row of the sell screen.
+  static Future<List<Product>> topSold({int limit = 12}) async {
+    final d = await db;
+    final r = await d.rawQuery(
+        'SELECT p.* FROM products p JOIN (SELECT barcode, SUM(qty) q FROM sale_items GROUP BY barcode ORDER BY q DESC LIMIT ?) s ON s.barcode=p.barcode ORDER BY s.q DESC',
+        [limit]);
+    return r.map(Product.fromMap).toList();
+  }
+
+  /// Products whose known stock (units) is at or under [threshold].
+  static Future<List<Product>> lowStock({int threshold = 5, int limit = 200}) async {
+    final d = await db;
+    final r = await d.query('products', where: 'stock IS NOT NULL AND stock<=?', whereArgs: [threshold], orderBy: 'stock, name COLLATE NOCASE', limit: limit);
+    return r.map(Product.fromMap).toList();
+  }
+
+  static Future<int> stockKnownCount() async {
+    final d = await db;
+    return Sqflite.firstIntValue(await d.rawQuery('SELECT COUNT(*) FROM products WHERE stock IS NOT NULL')) ?? 0;
+  }
+
+  /// Numbers of one day (yyyy-MM-dd) or of everything since [since] (a "yyyy-MM-dd HH:mm:ss" text).
+  static Future<DayReport> report({String? day, String? since}) async {
+    final d = await db;
+    final w = day != null ? 'created_at LIKE ?' : 'created_at >= ?';
+    final a = day != null ? ['$day%'] : [since ?? '0000'];
+    final r = DayReport();
+    final s = await d.rawQuery('SELECT COUNT(*) c, COALESCE(SUM(net_total),0) t, COALESCE(SUM(discount),0) disc FROM sales WHERE $w', a);
+    r.count = s.first['c'] as int;
+    r.sales = (s.first['t'] as num).toDouble();
+    r.discounts = (s.first['disc'] as num).toDouble();
+    for (final e in await d.rawQuery('SELECT payment, COUNT(*) c, SUM(net_total) t FROM sales WHERE $w GROUP BY payment', a)) {
+      r.byPayment['${e['payment']}'] = (e['t'] as num).toDouble();
+    }
+    final rr = await d.rawQuery('SELECT COUNT(*) c, COALESCE(SUM(total),0) t FROM returns WHERE $w', a);
+    r.returnsCount = rr.first['c'] as int;
+    r.returns = (rr.first['t'] as num).toDouble();
+    for (final e in await d.rawQuery('SELECT payment, SUM(total) t FROM returns WHERE $w GROUP BY payment', a)) {
+      r.returnsByPayment['${e['payment']}'] = (e['t'] as num).toDouble();
+    }
+    final wi = day != null ? 's.created_at LIKE ?' : 's.created_at >= ?';
+    for (final e in await d.rawQuery(
+        'SELECT i.name n, SUM(i.qty) q, SUM(i.subtotal) t FROM sale_items i JOIN sales s ON s.id=i.sale_id WHERE $wi GROUP BY i.barcode ORDER BY q DESC LIMIT 8',
+        a)) {
+      r.top.add((name: '${e['n']}', qty: (e['q'] as num).toInt(), total: (e['t'] as num).toDouble()));
+    }
+    return r;
+  }
+
+  // ------------------------------------------------------------ returns
+  /// Items of a sale with how many of each were already returned.
+  static Future<List<({int itemId, String barcode, String name, String unit, int qty, int returned, double price})>> returnable(int saleId) async {
+    final d = await db;
+    final r = await d.rawQuery(
+        'SELECT i.id, i.barcode, i.name, i.unit, i.qty, i.price, COALESCE((SELECT SUM(qty) FROM return_items x WHERE x.sale_item_id=i.id),0) ret FROM sale_items i WHERE i.sale_id=? ORDER BY i.id',
+        [saleId]);
+    return [
+      for (final e in r)
+        (
+          itemId: e['id'] as int,
+          barcode: '${e['barcode']}',
+          name: '${e['name']}',
+          unit: '${e['unit']}',
+          qty: e['qty'] as int,
+          returned: (e['ret'] as num).toInt(),
+          price: (e['price'] as num).toDouble()
+        )
+    ];
+  }
+
+  /// Returns [qtyByItem] (sale_item id -> units to take back). Stock is restored. Never more than was sold.
+  /// Local record (the desktop receiver takes sales only): shown in the day report and the shift cash.
+  static Future<String?> createReturn(int saleId, Map<int, int> qtyByItem, String cashier) async {
+    final d = await db;
+    final items = await returnable(saleId);
+    final pick = <({int itemId, String barcode, String name, String unit, int qty, int returned, double price}), int>{};
+    for (final it in items) {
+      final q = (qtyByItem[it.itemId] ?? 0).clamp(0, it.qty - it.returned);
+      if (q > 0) pick[it] = q;
+    }
+    if (pick.isEmpty) return null;
+    final sale = (await d.query('sales', where: 'id=?', whereArgs: [saleId])).first;
+    final now = DateTime.now();
+    var total = 0.0;
+    late String no;
+    await d.transaction((t) async {
+      var n = (Sqflite.firstIntValue(await t.rawQuery('SELECT COUNT(*) FROM returns')) ?? 0) + 1;
+      while ((await t.query('returns', where: 'receipt_no=?', whereArgs: ['RT-${sale['receipt_no']}-$n'])).isNotEmpty) {
+        n++;
+      }
+      no = 'RT-${sale['receipt_no']}-$n';
+      for (final e in pick.entries) {
+        total += e.key.price * e.value;
+      }
+      total = double.parse(total.toStringAsFixed(2));
+      final rid = await t.insert('returns', {
+        'receipt_no': no,
+        'sale_id': saleId,
+        'created_at': fmtDt(now),
+        'total': total,
+        'payment': sale['payment'],
+        'cashier': cashier,
+      });
+      for (final e in pick.entries) {
+        final it = e.key;
+        final sub = double.parse((it.price * e.value).toStringAsFixed(2));
+        final row = await t.query('sale_items', columns: ['base_units', 'qty'], where: 'id=?', whereArgs: [it.itemId]);
+        final per = (row.first['qty'] as int) == 0 ? 0 : ((row.first['base_units'] as int) ~/ (row.first['qty'] as int));
+        await t.insert('return_items', {
+          'return_id': rid,
+          'sale_item_id': it.itemId,
+          'barcode': it.barcode,
+          'name': it.name,
+          'unit': it.unit,
+          'qty': e.value,
+          'price': it.price,
+          'subtotal': sub,
+          'base_units': per * e.value,
+        });
+        await t.rawUpdate('UPDATE products SET stock=stock+? WHERE barcode=? AND stock IS NOT NULL', [per * e.value, it.barcode]);
+      }
+    });
+    return no;
+  }
+
+  // ------------------------------------------------------------- shifts
+  static Future<Map<String, Object?>?> openShift() async {
+    final d = await db;
+    final r = await d.query('shifts', where: 'closed_at IS NULL', orderBy: 'id DESC', limit: 1);
+    return r.isEmpty ? null : r.first;
+  }
+
+  static Future<void> startShift(double opening, String cashier) async {
+    final d = await db;
+    if (await openShift() != null) return;
+    await d.insert('shifts', {'opened_at': fmtDt(DateTime.now()), 'opening': opening, 'cashier': cashier});
+  }
+
+  /// Cash that should be in the drawer: opening + cash sales - cash returns since the shift opened.
+  static Future<double> expectedCash(Map<String, Object?> shift) async {
+    final r = await report(since: '${shift['opened_at']}');
+    return (shift['opening'] as num).toDouble() + (r.byPayment['Cash'] ?? 0) - (r.returnsByPayment['Cash'] ?? 0);
+  }
+
+  static Future<double> closeShift(int id, double counted) async {
+    final d = await db;
+    final sh = (await d.query('shifts', where: 'id=?', whereArgs: [id])).first;
+    final exp = await expectedCash(sh);
+    await d.update('shifts', {'closed_at': fmtDt(DateTime.now()), 'expected': exp, 'counted': counted}, where: 'id=?', whereArgs: [id]);
+    return counted - exp;
+  }
+
+  static Future<List<Map<String, Object?>>> lastShifts({int limit = 6}) async {
+    final d = await db;
+    return d.query('shifts', where: 'closed_at IS NOT NULL', orderBy: 'id DESC', limit: limit);
   }
 
   static Future<List<SaleHeader>> recentSales({int limit = 300}) async {
@@ -783,8 +1144,9 @@ class Db {
         'device_name': device,
         'payment_method': h['payment'],
         'discount': h['discount'],
+        'customer_name': h['customer'],
         'items': [
-          for (final i in items) {'barcode': i['barcode'], 'qty': i['qty'], 'unit': 'pack'}
+          for (final i in items) {'barcode': i['barcode'], 'qty': i['qty'], 'unit': i['unit'] ?? 'pack'}
         ],
       });
     }

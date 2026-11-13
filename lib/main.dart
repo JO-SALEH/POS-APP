@@ -31,7 +31,7 @@ class JoApp extends StatelessWidget {
     return ListenableBuilder(
       listenable: app,
       builder: (context, _) => MaterialApp(
-        title: 'JO POS',
+        title: 'JØ PHARMA MOBILE',
         debugShowCheckedModeBanner: false,
         theme: buildTheme(),
         builder: (c, child) => Directionality(

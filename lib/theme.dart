@@ -167,29 +167,33 @@ class GhostButton extends StatelessWidget {
       );
 }
 
-/// "JØ" brand mark.
+/// The official JØ PHARMA emblem (same artwork as the desktop program).
 class JoLogo extends StatelessWidget {
   final double size;
   const JoLogo({super.key, this.size = 56});
 
   @override
-  Widget build(BuildContext context) => Container(
-        width: size * 1.6,
-        height: size * 1.6,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          border: Border.all(color: JC.gold, width: 2),
-          gradient: const RadialGradient(colors: [JC.surface3, JC.bg]),
-          boxShadow: [BoxShadow(color: JC.gold.withOpacity(0.25), blurRadius: 24)],
+  Widget build(BuildContext context) {
+    final d = size * 1.6;
+    return Container(
+      width: d,
+      height: d,
+      decoration: BoxDecoration(shape: BoxShape.circle, boxShadow: [BoxShadow(color: JC.gold.withOpacity(0.25), blurRadius: 24)]),
+      child: ClipOval(
+        child: Image.asset(
+          'assets/logo.png',
+          width: d,
+          height: d,
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => Container(
+            color: JC.surface3,
+            alignment: Alignment.center,
+            child: Text('JØ', style: TextStyle(fontSize: size * 0.7, fontWeight: FontWeight.w900, color: JC.gold)),
+          ),
         ),
-        alignment: Alignment.center,
-        child: ShaderMask(
-          shaderCallback: (r) => const LinearGradient(colors: [JC.goldHi, JC.gold, JC.goldDark]).createShader(r),
-          child: Text('JØ',
-              textDirection: TextDirection.ltr,
-              style: TextStyle(fontSize: size * 0.7, fontWeight: FontWeight.w900, color: Colors.white)),
-        ),
-      );
+      ),
+    );
+  }
 }
 
 Future<bool> confirmDialog(BuildContext context, String message, String okLabel, String cancelLabel,

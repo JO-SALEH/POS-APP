@@ -24,7 +24,7 @@ add = "".join("    " + p + "\n" for p in perms if p.split('"')[1] not in m)
 if add:
     m = re.sub(r"(<manifest[^>]*>\s*)", lambda g: g.group(1) + "\n" + add, m, count=1)
 
-m = re.sub(r'android:label="[^"]*"', 'android:label="JO POS"', m, count=1)
+m = re.sub(r'android:label="[^"]*"', 'android:label="JØ PHARMA MOBILE"', m, count=1)
 if "usesCleartextTraffic" not in m:
     m = m.replace("<application", '<application\n        android:usesCleartextTraffic="true"', 1)
 

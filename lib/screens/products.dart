@@ -381,6 +381,8 @@ class _ProductsScreenState extends State<ProductsScreen> {
                                 Text(p.name, style: const TextStyle(color: JC.silver, fontWeight: FontWeight.w700)),
                                 const SizedBox(height: 2),
                                 Text(p.barcode, textDirection: TextDirection.ltr, style: const TextStyle(color: JC.muted, fontSize: 11)),
+                                if (p.stock != null)
+                                  Text(tr('stock_of', [p.stock!]), style: TextStyle(color: p.stock! <= 0 ? JC.danger : JC.muted, fontSize: 11)),
                               ]),
                             ),
                             FutureBuilder<int>(
@@ -426,6 +428,10 @@ class _ProductFormState extends State<ProductForm> {
       TextEditingController(text: widget.product == null ? '' : fmtMoney(widget.product!.price));
   List<Product> _alts = [];
   final _extra = TextEditingController();
+  late final TextEditingController _nameAr = TextEditingController(text: widget.product?.nameAr ?? '');
+  late final TextEditingController _upp = TextEditingController(text: '${widget.product?.unitsPerPack ?? 1}');
+  late final TextEditingController _strip = TextEditingController(text: '${widget.product?.stripSize ?? 0}');
+  late final TextEditingController _stock = TextEditingController(text: widget.product?.stock?.toString() ?? '');
   late Product? _cur = widget.product;
   String? _err;
 
@@ -460,6 +466,11 @@ class _ProductFormState extends State<ProductForm> {
     p.barcode = _code.text.trim();
     p.name = _name.text.trim();
     p.price = pr;
+    p.nameAr = _nameAr.text.trim();
+    p.unitsPerPack = (int.tryParse(_upp.text.trim()) ?? 1).clamp(1, 100000);
+    p.stripSize = (int.tryParse(_strip.text.trim()) ?? 0).clamp(0, 100000);
+    if (p.stripSize >= p.unitsPerPack) p.stripSize = 0; // a strip must be smaller than the pack
+    p.stock = _stock.text.trim().isEmpty ? null : (int.tryParse(_stock.text.trim()) ?? 0).clamp(0, 100000000);
     if (p.id == null) {
       final id = await Db.insertProduct(p);
       if (id == null) return setState(() => _err = tr('dup_barcode'));
@@ -512,6 +523,35 @@ class _ProductFormState extends State<ProductForm> {
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             style: const TextStyle(color: JC.silver),
             decoration: InputDecoration(labelText: '${tr('price')} (${tr('currency')})'),
+          ),
+          const SizedBox(height: 12),
+          TextField(controller: _nameAr, style: const TextStyle(color: JC.silver), decoration: InputDecoration(labelText: tr('name_ar_label'))),
+          const SizedBox(height: 12),
+          Row(children: [
+            Expanded(
+              child: TextField(
+                controller: _upp,
+                keyboardType: TextInputType.number,
+                style: const TextStyle(color: JC.silver),
+                decoration: InputDecoration(labelText: tr('units_per_pack')),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: TextField(
+                controller: _strip,
+                keyboardType: TextInputType.number,
+                style: const TextStyle(color: JC.silver),
+                decoration: InputDecoration(labelText: tr('strip_size')),
+              ),
+            ),
+          ]),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _stock,
+            keyboardType: TextInputType.number,
+            style: const TextStyle(color: JC.silver),
+            decoration: InputDecoration(labelText: tr('stock_label')),
           ),
           const SizedBox(height: 12),
           TextField(

@@ -18,11 +18,23 @@ class _SellScreenState extends State<SellScreen> {
   final _q = TextEditingController();
   final _focus = FocusNode();
   List<Product> _results = [];
+  List<Product> _top = [];
+  int _held = 0;
 
   @override
   void initState() {
     super.initState();
     app.addListener(_onApp);
+    _loadExtras();
+  }
+
+  Future<void> _loadExtras() async {
+    final t = await Db.topSold();
+    final h = await Db.heldList();
+    if (mounted) setState(() {
+      _top = t;
+      _held = h.length;
+    });
   }
 
   void _onApp() {
@@ -89,21 +101,104 @@ class _SellScreenState extends State<SellScreen> {
   }
 
   Future<void> _checkout() async {
-    final done = await showDialog<bool>(context: context, builder: (_) => const _CheckoutDialog());
-    if (done == true && mounted) toast(context, tr('sale_saved'));
+    // like the desktop: warn when something is sold with no (or not enough) stock
+    final short = [for (final l in app.cart) if (l.product.stock != null && l.baseUnits > l.product.stock!) l];
+    if (short.isNotEmpty) {
+      final names = short.map((l) => '• ${l.product.name}  (${tr('stock_of', [l.product.stock!])})').join('\n');
+      if (!await confirmDialog(context, '${tr('short_msg')}\n\n$names', tr('sell_anyway'), tr('cancel'), danger: true)) return;
+    }
+    if (!mounted) return;
+    final receipt = await showDialog<String>(context: context, barrierDismissible: false, builder: (_) => const _CheckoutDialog());
+    if (receipt != null && mounted) {
+      _loadExtras();
+      await showReceipt(context, receipt);
+    }
+  }
+
+  Future<void> _holdDialog() async {
+    final c = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (d) => AlertDialog(
+        backgroundColor: JC.surface2,
+        title: Text(tr('hold'), style: const TextStyle(color: JC.gold, fontWeight: FontWeight.bold)),
+        content: TextField(controller: c, autofocus: true, style: const TextStyle(color: JC.silver), decoration: InputDecoration(labelText: tr('held_label'))),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(d, false), child: Text(tr('cancel'), style: const TextStyle(color: JC.muted))),
+          GoldButton(label: tr('hold'), compact: true, onPressed: () => Navigator.pop(d, true)),
+        ],
+      ),
+    );
+    if (ok == true) {
+      await app.holdCurrent(c.text);
+      await _loadExtras();
+      if (mounted) toast(context, tr('held_ok'));
+    }
+  }
+
+  Future<void> _heldSheet() async {
+    final list = await Db.heldList();
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (c) => StatefulBuilder(
+        builder: (c, setS) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(tr('held_title'), style: const TextStyle(color: JC.gold, fontSize: 16, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 8),
+              if (list.isEmpty) Padding(padding: const EdgeInsets.all(16), child: Text(tr('held_none'), style: const TextStyle(color: JC.muted))),
+              Flexible(
+                child: ListView(shrinkWrap: true, children: [
+                  for (final h in list)
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.pause_circle_outline, color: JC.gold),
+                      title: Text('${h['label']}', style: const TextStyle(color: JC.silver)),
+                      subtitle: Text('${h['created_at']}  ·  ${h['count']}', textDirection: TextDirection.ltr, style: const TextStyle(color: JC.muted, fontSize: 12)),
+                      onTap: () async {
+                        await app.recall(h['id'] as int);
+                        if (c.mounted) Navigator.pop(c);
+                      },
+                      trailing: IconButton(
+                        icon: const Icon(Icons.delete_outline, color: JC.danger),
+                        onPressed: () async {
+                          await Db.deleteHeld(h['id'] as int);
+                          list.remove(h);
+                          setS(() {});
+                        },
+                      ),
+                    ),
+                ]),
+              ),
+            ]),
+          ),
+        ),
+      ),
+    );
+    await _loadExtras();
   }
 
   @override
   Widget build(BuildContext context) {
     return Column(children: [
       PageTitle(tr('nav_sell'), actions: [
+        if (app.canUndo) IconButton(tooltip: tr('undo'), icon: const Icon(Icons.undo, color: JC.gold), onPressed: app.undo),
+        if (app.cart.isNotEmpty) IconButton(tooltip: tr('hold'), icon: const Icon(Icons.pause_circle_outline, color: JC.gold), onPressed: _holdDialog),
+        IconButton(
+          tooltip: tr('held_title'),
+          icon: Badge(isLabelVisible: _held > 0, label: Text('$_held'), child: const Icon(Icons.history, color: JC.gold)),
+          onPressed: _heldSheet,
+        ),
         if (app.cart.isNotEmpty)
-          TextButton.icon(
+          IconButton(
+            tooltip: tr('clear_cart'),
+            icon: const Icon(Icons.delete_sweep_outlined, color: JC.danger),
             onPressed: () async {
               if (await confirmDialog(context, tr('confirm_clear'), tr('confirm'), tr('cancel'), danger: true)) app.clearCart();
             },
-            icon: const Icon(Icons.delete_sweep_outlined, color: JC.danger, size: 20),
-            label: Text(tr('clear_cart'), style: const TextStyle(color: JC.danger)),
           ),
       ]),
       Padding(
@@ -152,7 +247,7 @@ class _SellScreenState extends State<SellScreen> {
               return ListTile(
                 dense: true,
                 title: Text(p.name, style: const TextStyle(color: JC.silver)),
-                subtitle: Text(p.barcode, style: const TextStyle(color: JC.muted, fontSize: 11)),
+                subtitle: Text(p.stock == null ? p.barcode : '${p.barcode}  ·  ${tr('stock_of', [p.stock!])}', style: TextStyle(color: (p.stock ?? 1) <= 0 ? JC.danger : JC.muted, fontSize: 11)),
                 trailing: Text(fmtMoney(p.price), style: const TextStyle(color: JC.gold, fontWeight: FontWeight.bold)),
                 onTap: () {
                   app.addToCart(p);
@@ -161,6 +256,28 @@ class _SellScreenState extends State<SellScreen> {
                 },
               );
             },
+          ),
+        ),
+      if (_results.isEmpty && _top.isNotEmpty)
+        SizedBox(
+          height: 44,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+            children: [
+              Padding(padding: const EdgeInsetsDirectional.only(end: 8), child: Center(child: Text(tr('fast_title'), style: const TextStyle(color: JC.muted, fontSize: 12)))),
+              for (final p in _top)
+                Padding(
+                  padding: const EdgeInsetsDirectional.only(end: 6),
+                  child: ActionChip(
+                    label: Text(p.name.length > 22 ? '${p.name.substring(0, 22)}…' : p.name),
+                    labelStyle: const TextStyle(color: JC.silver, fontSize: 12),
+                    backgroundColor: JC.surface3,
+                    side: const BorderSide(color: JC.borderHi),
+                    onPressed: () => app.addToCart(p),
+                  ),
+                ),
+            ],
           ),
         ),
       const SizedBox(height: 8),
@@ -260,7 +377,27 @@ class _CartTile extends StatelessWidget {
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(p.name, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: JC.silver, fontWeight: FontWeight.w700, fontSize: 15)),
             const SizedBox(height: 4),
-            Text('${fmtMoney(p.price)} × ${line.qty} = ${fmtMoney(line.subtotal)}', style: const TextStyle(color: JC.gold, fontSize: 13)),
+            if (p.unitOptions.length > 1)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Wrap(spacing: 6, children: [
+                  for (final u in p.unitOptions)
+                    ChoiceChip(
+                      visualDensity: VisualDensity.compact,
+                      label: Text(tr('unit_$u')),
+                      selected: line.unit == u,
+                      selectedColor: JC.gold,
+                      backgroundColor: JC.surface3,
+                      labelStyle: TextStyle(color: line.unit == u ? JC.onGold : JC.silver, fontSize: 12, fontWeight: FontWeight.bold),
+                      onSelected: (_) => app.setUnit(line, u),
+                    ),
+                ]),
+              ),
+            const SizedBox(height: 4),
+            Text('${fmtMoney(line.price)} × ${line.qty} = ${fmtMoney(line.subtotal)}', style: const TextStyle(color: JC.gold, fontSize: 13)),
+            if (p.stock != null)
+              Text(tr('stock_of', [p.stock!]),
+                  style: TextStyle(color: line.baseUnits > p.stock! ? JC.danger : JC.muted, fontSize: 11, fontWeight: line.baseUnits > p.stock! ? FontWeight.w800 : FontWeight.w400)),
             if (p.id != null)
               FutureBuilder<int>(
                 future: Db.altCount(p.id!),
@@ -313,28 +450,56 @@ class _CheckoutDialog extends StatefulWidget {
 
 class _CheckoutDialogState extends State<_CheckoutDialog> {
   String _pay = 'Cash';
+  bool _pct = false;
   final _disc = TextEditingController();
+  final _cust = TextEditingController();
+  final _recv = TextEditingController();
+  double _taxRate = 0;
+  String? _err;
   bool _busy = false;
 
-  double get _d => (double.tryParse(_disc.text.trim().replaceAll(',', '.')) ?? 0).clamp(0, app.cartTotal).toDouble();
+  @override
+  void initState() {
+    super.initState();
+    Db.getSetting('tax_rate', '0').then((v) {
+      final t = double.tryParse(v.replaceAll(',', '.')) ?? 0;
+      if (mounted) setState(() => _taxRate = t.clamp(0, 100).toDouble());
+    });
+  }
 
   @override
   void dispose() {
     _disc.dispose();
+    _cust.dispose();
+    _recv.dispose();
     super.dispose();
   }
 
+  double _num(TextEditingController c) => double.tryParse(c.text.trim().replaceAll(',', '.')) ?? 0;
+  double get _sub => app.cartTotal;
+  double get _d {
+    final v = _pct ? _sub * _num(_disc).clamp(0, 100) / 100 : _num(_disc).clamp(0, _sub);
+    return double.parse(v.toDouble().toStringAsFixed(2));
+  }
+
+  double get _tax => double.parse(((_sub - _d) * _taxRate / 100).toStringAsFixed(2));
+  double get _net => double.parse((_sub - _d + _tax).toStringAsFixed(2));
+
   Future<void> _save() async {
+    if (_pay == 'Credit' && _cust.text.trim().isEmpty) return setState(() => _err = tr('credit_need_customer'));
+    final recv = _pay == 'Cash' ? _num(_recv) : 0.0;
+    if (_pay == 'Cash' && _recv.text.trim().isNotEmpty && recv + 0.0001 < _net) return setState(() => _err = tr('received_less'));
     setState(() => _busy = true);
-    await Db.createSale(List.of(app.cart), _d, _pay, app.user);
-    app.clearCart();
+    final no = await Db.createSale(List.of(app.cart), _d, _pay, app.user, customer: _cust.text, received: recv, tax: _tax);
+    app.finishSale();
     Lan.afterSale(); // sends it to the PC right away when the PC is reachable
-    if (mounted) Navigator.pop(context, true);
+    if (mounted) Navigator.pop(context, no);
   }
 
   @override
   Widget build(BuildContext context) {
-    final methods = {'Cash': tr('cash'), 'Card': tr('card'), 'Wallet': tr('wallet')};
+    final methods = {'Cash': tr('cash'), 'Card': tr('card'), 'Wallet': tr('wallet'), 'Credit': tr('pay_credit')};
+    final recv = _num(_recv);
     return AlertDialog(
       backgroundColor: JC.surface2,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: const BorderSide(color: JC.borderHi)),
@@ -351,26 +516,104 @@ class _CheckoutDialogState extends State<_CheckoutDialog> {
                 selectedColor: JC.gold,
                 backgroundColor: JC.surface3,
                 labelStyle: TextStyle(color: _pay == e.key ? JC.onGold : JC.silver, fontWeight: FontWeight.bold),
-                onSelected: (_) => setState(() => _pay = e.key),
+                onSelected: (_) => setState(() {
+                  _pay = e.key;
+                  _err = null;
+                }),
               ),
           ]),
           const SizedBox(height: 14),
           TextField(
-            controller: _disc,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            onChanged: (_) => setState(() {}),
+            controller: _cust,
             style: const TextStyle(color: JC.silver),
-            decoration: InputDecoration(labelText: tr('discount')),
+            decoration: InputDecoration(labelText: _pay == 'Credit' ? '${tr('customer')} *' : tr('customer'), helperText: tr('customer_walkin')),
           ),
           const SizedBox(height: 14),
-          Text('${tr('net')}: ${fmtMoney(app.cartTotal - _d)} ${tr('currency')}',
-              style: const TextStyle(color: JC.gold, fontSize: 20, fontWeight: FontWeight.w900)),
+          Row(children: [
+            Expanded(
+              child: TextField(
+                controller: _disc,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                onChanged: (_) => setState(() {}),
+                style: const TextStyle(color: JC.silver),
+                decoration: InputDecoration(labelText: tr('discount'), suffixText: _pct ? '%' : tr('currency')),
+              ),
+            ),
+            const SizedBox(width: 8),
+            SegmentedButton<bool>(
+              showSelectedIcon: false,
+              segments: [ButtonSegment(value: false, label: Text(tr('currency'))), const ButtonSegment(value: true, label: Text('%'))],
+              selected: {_pct},
+              onSelectionChanged: (v) => setState(() => _pct = v.first),
+              style: ButtonStyle(
+                backgroundColor: WidgetStateProperty.resolveWith((st) => st.contains(WidgetState.selected) ? JC.gold : JC.surface3),
+                foregroundColor: WidgetStateProperty.resolveWith((st) => st.contains(WidgetState.selected) ? JC.onGold : JC.silver),
+              ),
+            ),
+          ]),
+          const SizedBox(height: 12),
+          Text('${tr('total')}: ${fmtMoney(_sub)}', style: const TextStyle(color: JC.silverDim)),
+          if (_d > 0) Text('${tr('discount')}: -${fmtMoney(_d)}', style: const TextStyle(color: JC.warn)),
+          if (_tax > 0) Text('${tr('tax')} (${fmtMoney(_taxRate)}%): ${fmtMoney(_tax)}', style: const TextStyle(color: JC.silverDim)),
+          const SizedBox(height: 4),
+          Text('${tr('net')}: ${fmtMoney(_net)} ${tr('currency')}', style: const TextStyle(color: JC.gold, fontSize: 22, fontWeight: FontWeight.w900)),
+          if (_pay == 'Cash') ...[
+            const SizedBox(height: 12),
+            TextField(
+              controller: _recv,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              onChanged: (_) => setState(() => _err = null),
+              style: const TextStyle(color: JC.silver),
+              decoration: InputDecoration(labelText: tr('received')),
+            ),
+            if (_recv.text.trim().isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  recv + 0.0001 >= _net ? '${tr('change')}: ${fmtMoney(recv - _net)} ${tr('currency')}' : '${tr('remaining')}: ${fmtMoney(_net - recv)} ${tr('currency')}',
+                  style: TextStyle(color: recv + 0.0001 >= _net ? JC.success : JC.danger, fontWeight: FontWeight.w800, fontSize: 16),
+                ),
+              ),
+          ],
+          if (_err != null) Padding(padding: const EdgeInsets.only(top: 10), child: Text(_err!, style: const TextStyle(color: JC.danger))),
         ]),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context, false), child: Text(tr('cancel'), style: const TextStyle(color: JC.muted))),
+        TextButton(onPressed: () => Navigator.pop(context), child: Text(tr('cancel'), style: const TextStyle(color: JC.muted))),
         GoldButton(label: tr('confirm'), icon: Icons.check, compact: true, onPressed: _busy ? null : _save),
       ],
     );
   }
+}
+
+/// Receipt of a saved sale: lines, totals, and sharing as text (WhatsApp / print apps).
+Future<void> showReceipt(BuildContext context, String receiptNo) async {
+  final text = await Files.receiptText(receiptNo);
+  if (text == null || !context.mounted) return;
+  await showDialog<void>(
+    context: context,
+    builder: (c) => AlertDialog(
+      backgroundColor: JC.surface2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: const BorderSide(color: JC.borderHi)),
+      title: Row(children: [
+        const Icon(Icons.check_circle, color: JC.success),
+        const SizedBox(width: 8),
+        Expanded(child: Text(tr('sale_saved'), style: const TextStyle(color: JC.gold, fontWeight: FontWeight.bold))),
+      ]),
+      content: SingleChildScrollView(
+        child: Directionality(
+          textDirection: TextDirection.ltr,
+          child: Text(text, style: const TextStyle(color: JC.silver, fontFamily: 'monospace', fontSize: 12, height: 1.4)),
+        ),
+      ),
+      actions: [
+        TextButton.icon(
+          onPressed: () => Files.shareText(text),
+          icon: const Icon(Icons.ios_share, color: JC.gold, size: 18),
+          label: Text(tr('share_receipt'), style: const TextStyle(color: JC.gold)),
+        ),
+        GoldButton(label: tr('new_sale'), compact: true, onPressed: () => Navigator.pop(c)),
+      ],
+    ),
+  );
 }

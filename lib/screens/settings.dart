@@ -21,6 +21,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _dev = TextEditingController();
   final _user = TextEditingController();
   final _pass = TextEditingController();
+  final _store = TextEditingController();
+  final _tax = TextEditingController();
+  final _low = TextEditingController();
+  final _cuser = TextEditingController();
+  final _cpass = TextEditingController();
   bool _busy = false;
 
   @override
@@ -32,12 +37,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _load() async {
     _dev.text = await Db.getSetting('device_name');
     _user.text = await Db.getSetting('username', 'admin');
+    _store.text = await Db.getSetting('store_name', 'JØ PHARMA');
+    _tax.text = await Db.getSetting('tax_rate', '0');
+    _low.text = await Db.getSetting('low_stock', '5');
+    _cuser.text = await Db.getSetting('cashier_user');
     if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
-    for (final c in [_dev, _user, _pass]) {
+    for (final c in [_dev, _user, _pass, _store, _tax, _low, _cuser, _cpass]) {
       c.dispose();
     }
     super.dispose();
@@ -226,6 +235,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (mounted) toast(context, tr('saved'));
   }
 
+  Future<void> _saveSell() async {
+    final t = double.tryParse(_tax.text.trim().replaceAll(',', '.')) ?? 0;
+    final l = int.tryParse(_low.text.trim()) ?? 5;
+    await Db.setSetting('store_name', _store.text.trim().isEmpty ? 'JØ PHARMA' : _store.text.trim());
+    await Db.setSetting('tax_rate', '${t.clamp(0, 100)}');
+    await Db.setSetting('low_stock', '${l.clamp(0, 100000)}');
+    if (mounted) toast(context, tr('saved'));
+  }
+
+  Future<void> _saveCashier() async {
+    final u = _cuser.text.trim();
+    if (u.isEmpty) {
+      await Db.setSetting('cashier_user', '');
+      await Db.setSetting('cashier_pw_hash', '');
+      if (mounted) toast(context, tr('saved'));
+      return;
+    }
+    if (u == _user.text.trim()) return toast(context, tr('cashier_same'));
+    if (_cpass.text.isEmpty && (await Db.getSetting('cashier_pw_hash')).isEmpty) return toast(context, tr('required'));
+    await Db.setSetting('cashier_user', u);
+    if (_cpass.text.isNotEmpty) await Db.setSetting('cashier_pw_hash', hashPassword(_cpass.text));
+    _cpass.clear();
+    if (mounted) toast(context, tr('saved'));
+  }
+
   Widget _section(String title, List<Widget> children) => Padding(
         padding: const EdgeInsets.only(bottom: 14),
         child: JCard(
@@ -256,8 +290,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         ),
       ]),
-      _lanSection(),
-      _section(tr('import_file'), [
+      if (app.isManager) _lanSection(),
+      if (app.isManager) _section(tr('import_file'), [
         Text(tr('import_hint'), style: const TextStyle(color: JC.muted, fontSize: 12, height: 1.5)),
         _gap(),
         SizedBox(
@@ -273,7 +307,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _gap(),
         SizedBox(width: double.infinity, child: GhostButton(label: tr('export_db'), icon: Icons.backup_outlined, onPressed: () => Files.shareDb())),
       ]),
-      _section(tr('account'), [
+      if (app.isManager)
+        _section(tr('sell_settings'), [
+          TextField(controller: _store, style: const TextStyle(color: JC.silver), decoration: InputDecoration(labelText: tr('store_name'))),
+          _gap(),
+          TextField(
+            controller: _tax,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            style: const TextStyle(color: JC.silver),
+            decoration: InputDecoration(labelText: tr('tax_rate'), helperText: tr('tax_hint'), helperMaxLines: 3),
+          ),
+          _gap(),
+          TextField(
+            controller: _low,
+            keyboardType: TextInputType.number,
+            style: const TextStyle(color: JC.silver),
+            decoration: InputDecoration(labelText: tr('low_stock_at')),
+          ),
+          _gap(),
+          SizedBox(width: double.infinity, child: GoldButton(label: tr('save'), compact: true, onPressed: _saveSell)),
+        ]),
+      if (app.isManager) _section(tr('account'), [
         TextField(controller: _user, textDirection: TextDirection.ltr, style: const TextStyle(color: JC.silver), decoration: InputDecoration(labelText: tr('new_username'))),
         _gap(),
         TextField(controller: _pass, obscureText: true, style: const TextStyle(color: JC.silver), decoration: InputDecoration(labelText: tr('new_password'))),
@@ -284,6 +338,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
           Expanded(child: GhostButton(label: tr('logout'), icon: Icons.logout, color: JC.danger, onPressed: () => app.logout())),
         ]),
       ]),
+      if (app.isManager)
+        _section(tr('cashier_account'), [
+          Text(tr('cashier_hint'), style: const TextStyle(color: JC.muted, fontSize: 12, height: 1.5)),
+          _gap(),
+          TextField(controller: _cuser, textDirection: TextDirection.ltr, style: const TextStyle(color: JC.silver), decoration: InputDecoration(labelText: tr('new_username'))),
+          _gap(),
+          TextField(controller: _cpass, obscureText: true, style: const TextStyle(color: JC.silver), decoration: InputDecoration(labelText: tr('new_password'))),
+          _gap(),
+          SizedBox(width: double.infinity, child: GoldButton(label: tr('save'), compact: true, onPressed: _saveCashier)),
+        ]),
+      if (!app.isManager)
+        _section(tr('account'), [
+          Text('${tr('signed_in_as')}: ${app.user}', style: const TextStyle(color: JC.silverDim)),
+          _gap(),
+          SizedBox(width: double.infinity, child: GhostButton(label: tr('logout'), icon: Icons.logout, color: JC.danger, onPressed: () => app.logout())),
+        ]),
       _section(tr('about'), [
         Row(children: [
           const JoLogo(size: 18),
@@ -291,7 +361,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           Expanded(child: Text(tr('about_text'), style: const TextStyle(color: JC.silverDim, fontSize: 13))),
         ]),
         const SizedBox(height: 8),
-        Text('${tr('free_note')}  ·  v1.0.0', style: const TextStyle(color: JC.goldDark, fontSize: 12, fontWeight: FontWeight.w700)),
+        Text('${tr('free_note')}  ·  v2.0.0', style: const TextStyle(color: JC.goldDark, fontSize: 12, fontWeight: FontWeight.w700)),
       ]),
     ]);
   }

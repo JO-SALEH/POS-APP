@@ -130,7 +130,8 @@ class Importer {
 
   /// One medicine of the desktop (database row or LAN catalog row): primary barcode + its extra codes.
   static void _addMedicine(ParseResult pr, Object? id, Object? barcode, Object? name, Object? nameAr, Object? price,
-      Map<int, List<String>> extra) {
+      Map<int, List<String>> extra,
+      {Object? upp, Object? strip, Object? stock, bool meta = false}) {
     pr.rows++;
     var code = Codes.norm('${barcode ?? ''}');
     final alts = [...?(id is int ? extra[id] : null)];
@@ -146,7 +147,19 @@ class Importer {
       return;
     }
     final pv = price is num ? price.toDouble() : (double.tryParse('${price ?? ''}'.replaceAll(',', '.')) ?? 0);
-    pr.items.add(ImportItem(Product(barcode: code, name: n, price: pv), alts));
+    int asInt(Object? v, int d) => v is num ? v.toInt() : (int.tryParse('${v ?? ''}') ?? d);
+    final pack = asInt(upp, 1).clamp(1, 100000);
+    pr.items.add(ImportItem(
+        Product(
+            barcode: code,
+            name: n,
+            price: pv,
+            nameAr: '${nameAr ?? ''}'.trim(),
+            unitsPerPack: pack,
+            stripSize: asInt(strip, 0).clamp(0, 100000),
+            stock: stock == null ? null : asInt(stock, 0),
+            hasMeta: meta),
+        alts));
   }
 
   /// The JSON of the desktop LAN receiver (GET /catalog): {"rev","cols","rows","codes":[[code, med_id]]}.
@@ -154,6 +167,7 @@ class Importer {
     final cols = ((j['cols'] ?? []) as List).map((e) => '$e').toList();
     final iId = cols.indexOf('id'), iBc = cols.indexOf('barcode'), iName = cols.indexOf('name');
     final iAr = cols.indexOf('name_ar'), iPrice = cols.indexOf('price');
+    final iUpp = cols.indexOf('units_per_pack'), iStrip = cols.indexOf('strip_size'), iStock = cols.indexOf('stock_units');
     if (iId < 0 || iBc < 0 || iName < 0 || iPrice < 0) throw ImportException(tr('import_db_unknown'));
     final extra = <int, List<String>>{};
     for (final c in ((j['codes'] ?? []) as List)) {
@@ -165,7 +179,9 @@ class Importer {
     final pr = ParseResult();
     for (final r in ((j['rows'] ?? []) as List)) {
       if (r is! List || r.length <= iPrice) continue;
-      _addMedicine(pr, r[iId], r[iBc], r[iName], iAr >= 0 && iAr < r.length ? r[iAr] : '', r[iPrice], extra);
+      Object? at(int i) => i >= 0 && i < r.length ? r[i] : null;
+      _addMedicine(pr, r[iId], r[iBc], r[iName], iAr >= 0 && iAr < r.length ? r[iAr] : '', r[iPrice], extra,
+          upp: at(iUpp), strip: at(iStrip), stock: at(iStock), meta: true);
     }
     return pr;
   }
@@ -191,13 +207,19 @@ class Importer {
       }
       final cols = (await src.rawQuery('PRAGMA table_info(medications)')).map((r) => '${r['name']}').toSet();
       final arCol = cols.contains('name_ar') ? 'name_ar' : "'' AS name_ar";
+      final uppCol = cols.contains('units_per_pack') ? 'units_per_pack' : '1 AS units_per_pack';
+      final stripCol = cols.contains('strip_size') ? 'strip_size' : '0 AS strip_size';
+      final stockCol = cols.contains('quantity') && cols.contains('unit_quantity')
+          ? '(COALESCE(quantity,0) * MAX(1, COALESCE(units_per_pack,1)) + COALESCE(unit_quantity,0)) AS stock_units'
+          : 'NULL AS stock_units';
       var offset = 0;
       while (true) {
         final rows = await src.rawQuery(
-            'SELECT id, barcode, name, $arCol, price FROM medications ORDER BY id LIMIT 5000 OFFSET ?', [offset]);
+            'SELECT id, barcode, name, $arCol, price, $uppCol, $stripCol, $stockCol FROM medications ORDER BY id LIMIT 5000 OFFSET ?', [offset]);
         if (rows.isEmpty) break;
         for (final r in rows) {
-          _addMedicine(pr, r['id'], r['barcode'], r['name'], r['name_ar'], r['price'], extra);
+          _addMedicine(pr, r['id'], r['barcode'], r['name'], r['name_ar'], r['price'], extra,
+              upp: r['units_per_pack'], strip: r['strip_size'], stock: r['stock_units'], meta: true);
         }
         offset += rows.length;
         if (rows.length < 5000) break;
