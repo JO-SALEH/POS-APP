@@ -89,7 +89,7 @@ class Product {
   /// Units (tablets) taken from stock by ONE sold [unit].
   int multOf(String unit) => unit == 'pack' ? unitsPerPack : (unit == 'strip' ? (stripSize > 0 ? stripSize : unitsPerPack) : 1);
 
-  /// Same formula as the desktop (jo_lan._line_for): price * mult / units_per_pack, 2 decimals.
+  /// Same formula as the main JØ PHARMA program: price * mult / units_per_pack, 2 decimals.
   double priceFor(String unit) => unit == 'pack' ? double.parse(price.toStringAsFixed(2)) : double.parse((price * multOf(unit) / unitsPerPack).toStringAsFixed(2));
 }
 
@@ -1234,7 +1234,7 @@ class Db {
     return (count: (r.first['c'] as int), total: (r.first['s'] as num).toDouble());
   }
 
-  /// JSON payload understood by the desktop receiver (jo_mobile_sync.py).
+  /// JSON payload understood by the JØ PHARMA receiver.
   static Future<Map<String, Object?>> buildPayload({bool onlyUnsynced = true}) async {
     final d = await db;
     final heads = await d.query('sales', where: onlyUnsynced ? 'synced=0' : null, orderBy: 'id');
@@ -1269,7 +1269,7 @@ class Db {
     };
   }
 
-  /// Invoices in the exact shape the desktop receiver (jo_lan.py) takes: POST /sales {"invoices":[...]}.
+  /// Invoices in the exact shape the JØ PHARMA receiver takes: POST /sales {"invoices":[...]}.
   /// The same JSON is what the desktop's "import file" reads, so the offline export works too.
   static Future<List<Map<String, Object?>>> lanInvoices({bool onlyUnsynced = true}) async {
     final d = await db;

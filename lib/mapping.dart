@@ -17,7 +17,7 @@ class ImportOptions {
   const ImportOptions({this.preferArabic = false, this.mode = ImportMode.all});
 }
 
-/// Column detection and row cleaning, ported from the desktop import (jo_import.py):
+/// Column detection and row cleaning, ported from the JØ PHARMA import:
 /// header row found by synonyms (Arabic / English), columns guessed by their titles AND their content.
 class Mapper {
   static const fields = [
