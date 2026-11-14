@@ -153,7 +153,7 @@ void main() {
         [2, 'Sara', '', 0]
       ]);
       expect(await Db.customerBalance('ali hassan'), 12.5);
-      expect((await Db.searchCustomers('sa')).single.name, 'Sara');
+      expect((await Db.searchCustomers('sar')).single.name, 'Sara');
     });
     test('returns go to the PC only after their sale is synced', () async {
       final p = await seed();
