@@ -36,7 +36,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final low = await Db.lowStock(threshold: at);
     final known = await Db.stockKnownCount();
     final expDays = int.tryParse(await Db.getSetting('expiry_days', '90')) ?? 90;
-    final exp = await Db.expiringSoon(days: expDays);
+    final expList = await Db.expiringSoon(days: expDays);
     final sh = await Db.openShift();
     final exp = sh == null ? 0.0 : await Db.expectedCash(sh);
     final past = await Db.lastShifts();
@@ -46,7 +46,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _low = low;
       _lowAt = at;
       _stockKnown = known;
-      _exp = exp;
+      _exp = expList;
       _expDays = expDays;
       _shift = sh;
       _expected = exp;
