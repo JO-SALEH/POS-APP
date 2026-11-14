@@ -40,7 +40,7 @@ ThemeData buildTheme() {
     scaffoldBackgroundColor: Colors.transparent,
     canvasColor: JC.surface,
     dividerColor: JC.border,
-    dialogTheme: DialogTheme(
+    dialogTheme: DialogThemeData(
       backgroundColor: JC.surface2,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: const BorderSide(color: JC.borderHi)),
     ),
