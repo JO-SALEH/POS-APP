@@ -167,6 +167,8 @@ const Map<String, List<String>> _s = {
   'unit_strip': ['Strip', 'شريط'],
   'unit_unit': ['Unit', 'حبة'],
   'stock_of': ['Stock: {0}', 'المخزون: {0}'],
+  'footer_pc': ['For the full experience use JØ PHARMA on your computer', 'للتجربة الكاملة استخدم JØ PHARMA على الكمبيوتر'],
+  'developed_by': ['Developed by', 'Developed by'],
   'exp_line': ['Exp {0}', 'الصلاحية {0}'],
   'exp_expired': ['EXPIRED {0}', 'منتهي الصلاحية {0}'],
   'expired_block': ['These items are expired and cannot be sold (same as the PC):', 'هذه الأصناف منتهية الصلاحية ولا يمكن بيعها (مثل برنامج الكمبيوتر):'],

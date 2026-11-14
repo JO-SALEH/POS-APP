@@ -27,20 +27,53 @@ class _HomeShellState extends State<HomeShell> {
       if (mgr) const DashboardScreen(),
       const SettingsScreen(),
     ];
-    final dests = <NavigationDestination>[
-      NavigationDestination(icon: const Icon(Icons.point_of_sale), label: tr('nav_sell')),
-      if (mgr) NavigationDestination(icon: const Icon(Icons.inventory_2_outlined), label: tr('nav_products')),
-      NavigationDestination(icon: const Icon(Icons.receipt_long_outlined), label: tr('nav_sales')),
-      if (mgr) NavigationDestination(icon: const Icon(Icons.insights_outlined), label: tr('nav_today')),
-      NavigationDestination(icon: const Icon(Icons.settings_outlined), label: tr('nav_settings')),
+    final dests = <(IconData, String)>[
+      (Icons.point_of_sale, tr('nav_sell')),
+      if (mgr) (Icons.inventory_2_outlined, tr('nav_products')),
+      (Icons.receipt_long_outlined, tr('nav_sales')),
+      if (mgr) (Icons.insights_outlined, tr('nav_today')),
+      (Icons.settings_outlined, tr('nav_settings')),
     ];
     if (_tab >= pages.length) _tab = 0;
     return Scaffold(
       body: SafeArea(bottom: false, child: pages[_tab]),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _tab,
-        onDestinationSelected: (i) => setState(() => _tab = i),
-        destinations: dests,
+      bottomNavigationBar: SafeArea(
+        child: Container(
+          margin: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+          padding: const EdgeInsets.all(6),
+          decoration: BoxDecoration(
+            color: JC.surface2.withOpacity(0.94),
+            borderRadius: BorderRadius.circular(28),
+            border: Border.all(color: JC.gold.withOpacity(0.45)),
+            boxShadow: [BoxShadow(color: JC.gold.withOpacity(0.12), blurRadius: 18)],
+          ),
+          child: Row(children: [
+            for (var i = 0; i < dests.length; i++)
+              Expanded(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => setState(() => _tab = i),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 180),
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    decoration: BoxDecoration(
+                      color: i == _tab ? JC.gold.withOpacity(0.14) : Colors.transparent,
+                      borderRadius: BorderRadius.circular(22),
+                      border: Border.all(color: i == _tab ? JC.gold.withOpacity(0.8) : Colors.transparent),
+                    ),
+                    child: Column(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(dests[i].$1, size: 24, color: i == _tab ? JC.gold : JC.muted),
+                      const SizedBox(height: 3),
+                      Text(dests[i].$2,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: i == _tab ? JC.gold : JC.muted)),
+                    ]),
+                  ),
+                ),
+              ),
+          ]),
+        ),
       ),
     );
   }

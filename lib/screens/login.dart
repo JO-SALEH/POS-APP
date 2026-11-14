@@ -37,10 +37,8 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: RadialGradient(center: Alignment(0, -0.7), radius: 1.2, colors: [Color(0xFF1A1508), JC.bg]),
-        ),
+      body: DecoratedBox(
+        decoration: const BoxDecoration(),
         child: SafeArea(
           child: Center(
             child: SingleChildScrollView(
@@ -103,6 +101,8 @@ class _LoginScreenState extends State<LoginScreen> {
                   Text(tr('default_hint'), style: const TextStyle(color: JC.muted, fontSize: 12)),
                   const SizedBox(height: 6),
                   Text(tr('free_note'), style: const TextStyle(color: JC.goldDark, fontSize: 12, fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 10),
+                  const BrandFooter(),
                 ]),
               ),
             ),

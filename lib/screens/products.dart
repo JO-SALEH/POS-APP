@@ -347,12 +347,10 @@ class _ProductsScreenState extends State<ProductsScreen> {
           const SizedBox(height: 8),
           Expanded(
             child: _items.isEmpty
-                ? Center(
-                    child: Column(mainAxisSize: MainAxisSize.min, children: [
-                      Text(tr('no_products'), style: const TextStyle(color: JC.muted)),
-                      const SizedBox(height: 14),
-                      if (_total == 0) GhostButton(label: tr('import_file'), icon: Icons.upload_file, onPressed: _busy ? null : _import),
-                    ]),
+                ? EmptyState(
+                    icon: Icons.inventory_2_outlined,
+                    title: tr('no_products'),
+                    action: _total == 0 ? GhostButton(label: tr('import_file'), icon: Icons.upload_file, onPressed: _busy ? null : _import) : null,
                   )
                 : ListView.separated(
                     controller: _scroll,

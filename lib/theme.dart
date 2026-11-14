@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'i18n.dart';
 
 /// Same palette as JO PHARMA desktop (Vanta black + metallic gold).
 class JC {
@@ -31,15 +33,44 @@ ThemeData buildTheme() {
     error: JC.danger,
   );
   OutlineInputBorder ob(Color c, [double w = 1.2]) => OutlineInputBorder(
-      borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: c, width: w));
+      borderRadius: BorderRadius.circular(16), borderSide: BorderSide(color: c, width: w));
   return ThemeData(
     useMaterial3: true,
     colorScheme: scheme,
-    scaffoldBackgroundColor: JC.bg,
+    scaffoldBackgroundColor: Colors.transparent,
     canvasColor: JC.surface,
     dividerColor: JC.border,
+    dialogTheme: DialogTheme(
+      backgroundColor: JC.surface2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: const BorderSide(color: JC.borderHi)),
+    ),
+    bottomSheetTheme: const BottomSheetThemeData(
+      backgroundColor: JC.surface2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+    ),
+    textButtonTheme: TextButtonThemeData(
+      style: TextButton.styleFrom(shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
+    ),
+    filledButtonTheme: FilledButtonThemeData(
+      style: FilledButton.styleFrom(
+          backgroundColor: JC.gold,
+          foregroundColor: JC.onGold,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
+    ),
+    elevatedButtonTheme: ElevatedButtonThemeData(
+      style: ElevatedButton.styleFrom(
+          backgroundColor: JC.gold,
+          foregroundColor: JC.onGold,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
+    ),
+    chipTheme: ChipThemeData(
+      backgroundColor: JC.surface2.withOpacity(0.85),
+      side: const BorderSide(color: JC.borderHi),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+    ),
     appBarTheme: const AppBarTheme(
-      backgroundColor: JC.surface,
+      backgroundColor: Colors.transparent,
+      scrolledUnderElevation: 0,
       foregroundColor: JC.gold,
       elevation: 0,
       centerTitle: true,
@@ -47,7 +78,7 @@ ThemeData buildTheme() {
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
-      fillColor: JC.surface3,
+      fillColor: JC.surface2.withOpacity(0.92),
       labelStyle: const TextStyle(color: JC.silverDim),
       hintStyle: const TextStyle(color: JC.muted),
       border: ob(JC.border),
@@ -56,7 +87,7 @@ ThemeData buildTheme() {
       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
     ),
     navigationBarTheme: NavigationBarThemeData(
-      backgroundColor: JC.surface,
+      backgroundColor: JC.surface2,
       indicatorColor: JC.gold.withOpacity(0.18),
       labelTextStyle: WidgetStateProperty.resolveWith((s) => TextStyle(
           fontSize: 12,
@@ -97,11 +128,11 @@ class JCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Material(
-        color: JC.surface2,
+        color: JC.surface2.withOpacity(0.9),
         shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14), side: BorderSide(color: borderColor ?? JC.border)),
+            borderRadius: BorderRadius.circular(18), side: BorderSide(color: borderColor ?? JC.borderHi.withOpacity(0.8))),
         child: InkWell(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(18),
           onTap: onTap,
           child: Padding(padding: padding, child: child),
         ),
@@ -124,12 +155,14 @@ class GoldButton extends StatelessWidget {
       child: Material(
         color: Colors.transparent,
         child: InkWell(
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(18),
           onTap: onPressed,
           child: Ink(
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(12),
-              gradient: const LinearGradient(colors: [JC.goldHi, JC.gold, JC.goldDark]),
+              borderRadius: BorderRadius.circular(18),
+              gradient: const LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [JC.goldHi, JC.gold, JC.goldDark]),
+              border: Border.all(color: JC.goldHi.withOpacity(0.7)),
+              boxShadow: [BoxShadow(color: JC.gold.withOpacity(on ? 0.28 : 0), blurRadius: 14, offset: const Offset(0, 4))],
             ),
             padding: EdgeInsets.symmetric(horizontal: compact ? 14 : 20, vertical: compact ? 10 : 14),
             child: Row(mainAxisSize: MainAxisSize.min, mainAxisAlignment: MainAxisAlignment.center, children: [
@@ -160,8 +193,9 @@ class GhostButton extends StatelessWidget {
         icon: icon == null ? const SizedBox.shrink() : Icon(icon, size: 18, color: color),
         label: Text(label, style: TextStyle(color: color, fontWeight: FontWeight.w700)),
         style: OutlinedButton.styleFrom(
-          side: BorderSide(color: color.withOpacity(0.6)),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          side: BorderSide(color: color.withOpacity(0.7), width: 1.3),
+          backgroundColor: JC.surface2.withOpacity(0.7),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         ),
       );
@@ -203,7 +237,7 @@ Future<bool> confirmDialog(BuildContext context, String message, String okLabel,
     builder: (c) => AlertDialog(
       backgroundColor: JC.surface2,
       shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16), side: const BorderSide(color: JC.borderHi)),
+          borderRadius: BorderRadius.circular(20), side: const BorderSide(color: JC.borderHi)),
       content: Text(message, style: const TextStyle(color: JC.silver, fontSize: 16)),
       actions: [
         TextButton(onPressed: () => Navigator.pop(c, false), child: Text(cancelLabel, style: const TextStyle(color: JC.muted))),
@@ -220,4 +254,116 @@ void toast(BuildContext context, String msg) {
   ScaffoldMessenger.of(context)
     ..clearSnackBars()
     ..showSnackBar(SnackBar(content: Text(msg), duration: Duration(seconds: msg.length > 60 ? 7 : 2)));
+}
+
+
+/// The wavy black-and-gold background, behind every screen.
+class AppBackground extends StatelessWidget {
+  final Widget child;
+  const AppBackground({super.key, required this.child});
+
+  @override
+  Widget build(BuildContext context) => Stack(fit: StackFit.expand, children: [
+        const ColoredBox(color: JC.bg),
+        Image.asset('assets/bg.jpg', fit: BoxFit.cover, alignment: Alignment.center, errorBuilder: (_, __, ___) => const SizedBox.shrink()),
+        child,
+      ]);
+}
+
+/// Gold-gradient glyph on a glowing round plate: the "nothing here yet" picture of every screen.
+class EmptyState extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String? subtitle;
+  final Widget? action;
+  const EmptyState({super.key, required this.icon, required this.title, this.subtitle, this.action});
+
+  @override
+  Widget build(BuildContext context) => Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Container(
+              width: 132,
+              height: 132,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: RadialGradient(colors: [JC.gold.withOpacity(0.16), Colors.transparent]),
+                border: Border.all(color: JC.gold.withOpacity(0.35)),
+                boxShadow: [BoxShadow(color: JC.gold.withOpacity(0.22), blurRadius: 36)],
+              ),
+              child: ShaderMask(
+                blendMode: BlendMode.srcIn,
+                shaderCallback: (r) => const LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [JC.goldHi, JC.goldDark]).createShader(r),
+                child: Icon(icon, size: 68, color: Colors.white),
+              ),
+            ),
+            const SizedBox(height: 22),
+            Row(mainAxisSize: MainAxisSize.min, children: [
+              Container(width: 36, height: 1, color: JC.gold.withOpacity(0.5)),
+              const SizedBox(width: 12),
+              Flexible(child: Text(title, textAlign: TextAlign.center, style: const TextStyle(color: JC.gold, fontSize: 22, fontWeight: FontWeight.w800))),
+              const SizedBox(width: 12),
+              Container(width: 36, height: 1, color: JC.gold.withOpacity(0.5)),
+            ]),
+            if (subtitle != null) ...[
+              const SizedBox(height: 8),
+              Text(subtitle!, textAlign: TextAlign.center, style: const TextStyle(color: JC.silverDim, fontSize: 16, height: 1.5)),
+            ],
+            if (action != null) ...[const SizedBox(height: 18), action!],
+          ]),
+        ),
+      );
+}
+
+const _siteUrl = 'https://www.jo-royalty.vip';
+
+/// "Full experience on the PC" + "Developed by JØ ROYALTY" (opens the website).
+class BrandFooter extends StatelessWidget {
+  const BrandFooter({super.key});
+
+  Future<void> _open(BuildContext context) async {
+    var ok = false;
+    try {
+      ok = await launchUrl(Uri.parse(_siteUrl), mode: LaunchMode.externalApplication);
+    } catch (_) {}
+    if (!ok && context.mounted) toast(context, 'www.jo-royalty.vip');
+  }
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(16, 18, 16, 8),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              color: JC.surface2.withOpacity(0.85),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: JC.gold.withOpacity(0.4)),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              const Icon(Icons.desktop_windows_outlined, color: JC.gold, size: 18),
+              const SizedBox(width: 8),
+              Flexible(child: Text(tr('footer_pc'), textAlign: TextAlign.center, style: const TextStyle(color: JC.silverDim, fontSize: 12.5, height: 1.4))),
+            ]),
+          ),
+          const SizedBox(height: 10),
+          InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: () => _open(context),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              child: Text.rich(
+                TextSpan(style: const TextStyle(color: JC.muted, fontSize: 12), children: [
+                  TextSpan(text: '${tr('developed_by')} '),
+                  const TextSpan(
+                      text: 'JØ ROYALTY',
+                      style: TextStyle(color: JC.gold, fontWeight: FontWeight.w800, letterSpacing: 0.6, decoration: TextDecoration.underline, decorationColor: JC.goldDark)),
+                ]),
+                textDirection: TextDirection.ltr,
+              ),
+            ),
+          ),
+        ]),
+      );
 }

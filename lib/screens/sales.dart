@@ -232,7 +232,7 @@ class _SalesScreenState extends State<SalesScreen> {
       if (_busy) const LinearProgressIndicator(color: JC.gold, backgroundColor: JC.surface3),
       Expanded(
         child: _sales.isEmpty
-            ? Center(child: Text(tr('no_sales'), style: const TextStyle(color: JC.muted)))
+            ? EmptyState(icon: Icons.receipt_long_outlined, title: tr('no_sales'))
             : RefreshIndicator(
                 color: JC.gold,
                 onRefresh: _load,

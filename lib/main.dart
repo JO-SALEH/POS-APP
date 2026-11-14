@@ -14,7 +14,7 @@ Future<void> main() async {
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
     statusBarIconBrightness: Brightness.light,
-    systemNavigationBarColor: JC.surface,
+    systemNavigationBarColor: JC.bg,
     systemNavigationBarIconBrightness: Brightness.light,
   ));
   await Db.db; // opens + creates the local database (fully offline)
@@ -36,7 +36,7 @@ class JoApp extends StatelessWidget {
         theme: buildTheme(),
         builder: (c, child) => Directionality(
           textDirection: L.ar ? TextDirection.rtl : TextDirection.ltr,
-          child: child!,
+          child: AppBackground(child: child!),
         ),
         // The key forces a rebuild of the whole tree when the language changes.
         home: KeyedSubtree(

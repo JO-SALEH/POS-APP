@@ -371,8 +371,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
           Expanded(child: Text(tr('about_text'), style: const TextStyle(color: JC.silverDim, fontSize: 13))),
         ]),
         const SizedBox(height: 8),
-        Text('${tr('free_note')}  ·  v2.0.0', style: const TextStyle(color: JC.goldDark, fontSize: 12, fontWeight: FontWeight.w700)),
+        Text('${tr('free_note')}  ·  v2.1.0', style: const TextStyle(color: JC.goldDark, fontSize: 12, fontWeight: FontWeight.w700)),
       ]),
+      const BrandFooter(),
+      const SizedBox(height: 12),
     ]);
   }
 }

@@ -299,13 +299,10 @@ class _SellScreenState extends State<SellScreen> {
       const SizedBox(height: 8),
       Expanded(
         child: app.cart.isEmpty
-            ? Center(
-                child: Column(mainAxisSize: MainAxisSize.min, children: [
-                  const Icon(Icons.shopping_cart_outlined, color: JC.goldDark, size: 64),
-                  const SizedBox(height: 12),
-                  Text(tr('cart_empty'), textAlign: TextAlign.center, style: const TextStyle(color: JC.muted, fontSize: 15)),
-                ]),
-              )
+            ? EmptyState(
+                icon: Icons.shopping_cart_outlined,
+                title: tr('cart_empty').split('\n').first,
+                subtitle: tr('cart_empty').contains('\n') ? tr('cart_empty').split('\n').last : null)
             : ListView.separated(
                 padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
                 itemCount: app.cart.length,
@@ -314,8 +311,14 @@ class _SellScreenState extends State<SellScreen> {
               ),
       ),
       Container(
+        margin: const EdgeInsets.fromLTRB(12, 4, 12, 10),
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-        decoration: const BoxDecoration(color: JC.surface, border: Border(top: BorderSide(color: JC.borderHi))),
+        decoration: BoxDecoration(
+          color: JC.surface2.withOpacity(0.94),
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: JC.gold.withOpacity(0.45)),
+          boxShadow: [BoxShadow(color: JC.gold.withOpacity(0.1), blurRadius: 18)],
+        ),
         child: Row(children: [
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
