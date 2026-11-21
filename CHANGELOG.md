@@ -2,6 +2,13 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/); versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Purchase orders from the PC.** "Send to mobile" in the PC program's *Purchase orders* page hands a PDF (the selected rows, or the whole order) to the phone while the app is connected. The app downloads it on its next sync round, tells the PC it arrived and shows a notification; tapping it opens the new *Purchase orders from the PC* screen (open / share, save to the phone, delete). Requires the matching PC program (`GET /orders`, `GET /orders/<id>.pdf`, `POST /orders/<id>/ack`).
+- Every request now carries `X-JO-Client: mobile`, so the PC can tell the app is connected.
+- Android: `POST_NOTIFICATIONS` permission and core-library desugaring (added by `tools/patch_android.py`) for `flutter_local_notifications`.
+
 ## [2.1.0] — 2026-11-14
 
 ### Added

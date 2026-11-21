@@ -5,7 +5,9 @@ import '../db.dart';
 import '../i18n.dart';
 import '../importer.dart';
 import '../lan.dart';
+import '../orders.dart';
 import 'import_flow.dart';
+import 'orders.dart';
 import 'import_report.dart';
 import '../services.dart';
 import '../theme.dart';
@@ -195,6 +197,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
             SizedBox(width: double.infinity, child: GhostButton(label: tr('lan_get_products'), icon: Icons.download, onPressed: _busy ? null : _pullProducts)),
             _gap(),
             SizedBox(width: double.infinity, child: GhostButton(label: tr('lan_find'), icon: Icons.search, onPressed: _busy ? null : _find)),
+            _gap(),
+            ValueListenableBuilder<int>(
+              valueListenable: Orders.unseen,
+              builder: (_, n, __) => SizedBox(
+                width: double.infinity,
+                child: GhostButton(
+                  label: n > 0 ? tr('orders_btn_new', [n]) : tr('orders_btn'),
+                  icon: Icons.assignment_outlined,
+                  onPressed: () => Navigator.push(context, MaterialPageRoute<void>(builder: (_) => const OrdersScreen())),
+                ),
+              ),
+            ),
             _gap(),
             SizedBox(
               width: double.infinity,

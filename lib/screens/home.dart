@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../i18n.dart';
+import '../orders.dart';
 import '../theme.dart';
 import 'dashboard.dart';
 import '../services.dart';
@@ -16,6 +17,18 @@ class HomeShell extends StatefulWidget {
 
 class _HomeShellState extends State<HomeShell> {
   static int _tab = 0; // survives the language-change rebuild
+
+  @override
+  void initState() {
+    super.initState();
+    // a "new purchase order" notification was tapped while signed out: open the orders screen now
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (Orders.pendingOpen && app.loggedIn && app.isManager) {
+        Orders.pendingOpen = false;
+        Orders.open();
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -62,7 +75,13 @@ class _HomeShellState extends State<HomeShell> {
                       border: Border.all(color: i == _tab ? JC.gold.withOpacity(0.8) : Colors.transparent),
                     ),
                     child: Column(mainAxisSize: MainAxisSize.min, children: [
-                      Icon(dests[i].$1, size: 24, color: i == _tab ? JC.gold : JC.muted),
+                      if (mgr && i == dests.length - 1)
+                        ValueListenableBuilder<int>(
+                          valueListenable: Orders.unseen,
+                          builder: (_, n, __) => Badge(isLabelVisible: n > 0, label: Text('$n'), child: Icon(dests[i].$1, size: 24, color: i == _tab ? JC.gold : JC.muted)),
+                        )
+                      else
+                        Icon(dests[i].$1, size: 24, color: i == _tab ? JC.gold : JC.muted),
                       const SizedBox(height: 3),
                       Text(dests[i].$2,
                           maxLines: 1,

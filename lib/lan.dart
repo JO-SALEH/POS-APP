@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'db.dart';
 import 'i18n.dart';
 import 'importer.dart';
+import 'orders.dart';
 
 /// Shown to the user as is (already translated).
 class LanException implements Exception {
@@ -143,7 +144,10 @@ class Lan {
   }
 
   static Map<String, String> _hdr(Pairing p, {bool json = false}) =>
-      {'X-JO-Token': p.token, if (json) 'Content-Type': 'application/json; charset=utf-8'};
+      {'X-JO-Token': p.token, 'X-JO-Client': 'mobile', if (json) 'Content-Type': 'application/json; charset=utf-8'};
+
+  /// Headers of every request to the PC (token + "I am the phone app": the PC window then knows the phone is connected).
+  static Map<String, String> headers(Pairing p) => _hdr(p);
 
   static Map<String, dynamic> _json(http.Response r) {
     final j = jsonDecode(utf8.decode(r.bodyBytes));
@@ -168,6 +172,7 @@ class Lan {
     _name = name;
     _lastOk = DateTime.now();
     await _publish(online: true);
+    unawaited(Notifier.askPermission()); // Android 13+: allow the "new purchase order" notification
     return name;
   }
 
@@ -435,6 +440,9 @@ class Lan {
         } catch (_) {} // the product list can wait: invoices matter more
         _lastCatalog = DateTime.now();
       }
+      try {
+        await Orders.poll(); // purchase orders the PC handed over (download + notification)
+      } catch (_) {} // never blocks invoices
       await _publish(online: true);
     } on LanException catch (e) {
       await _publish(online: false, error: e.message);

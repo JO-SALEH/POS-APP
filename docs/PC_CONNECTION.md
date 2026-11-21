@@ -26,6 +26,9 @@ On the PC every phone invoice becomes a normal **sales invoice**, stock is deduc
 
 Safe to repeat: each invoice has a unique id, so a re-send after a dropped connection is recognised and never booked twice.
 
+## Purchase orders from the PC
+In the PC program open *Purchase orders*, optionally select some rows (no selection = the whole order) and press **Send to mobile**. It works only while this app is connected (the PC checks that the app asked within the last ~75 seconds); otherwise the PC tells you to open the app and pair. Within 30 seconds the app downloads the PDF and shows a notification; tap it to open *Settings → Purchase orders from the PC*. Orders stay on offer on the PC for 7 days.
+
 ## When a barcode is unknown to the PC
 The invoice is still received. The unknown lines wait in the PC's **Mobile receiver → Pending** list; link each to the right product there. The phone shows a yellow note on that invoice until then.
 

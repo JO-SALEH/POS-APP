@@ -17,6 +17,7 @@ with open(MANIFEST, "r", encoding="utf-8") as f:
 perms = [
     '<uses-permission android:name="android.permission.INTERNET"/>',
     '<uses-permission android:name="android.permission.CAMERA"/>',
+    '<uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>',   # Android 13+: "new purchase order" notification
     '<uses-feature android:name="android.hardware.camera" android:required="false"/>',
     '<uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>',
 ]
@@ -48,10 +49,34 @@ for gradle in ("build.gradle.kts", "build.gradle"):
                 f.write(g2)
             print("minSdk raised to 24 in", gradle)
 
+# flutter_local_notifications (purchase-order notification) needs "core library desugaring" in the app module
+DESUGAR = "com.android.tools:desugar_jdk_libs:2.0.4"
+for gradle in ("build.gradle.kts", "build.gradle"):
+    gp = os.path.join(ROOT, "android", "app", gradle)
+    if not os.path.exists(gp):
+        continue
+    with open(gp, "r", encoding="utf-8") as f:
+        g = f.read()
+    kts = gradle.endswith(".kts")
+    flag = "isCoreLibraryDesugaringEnabled = true" if kts else "coreLibraryDesugaringEnabled true"
+    dep = f'coreLibraryDesugaring("{DESUGAR}")' if kts else f"coreLibraryDesugaring '{DESUGAR}'"
+    g2 = g
+    if "oreLibraryDesugaring" not in g2.split("dependencies")[0] and flag.split(" ")[0] not in g2:
+        g2 = re.sub(r"(compileOptions\s*\{)", lambda mo: mo.group(1) + "\n        " + flag, g2, count=1)
+    if "coreLibraryDesugaring(" not in g2 and "coreLibraryDesugaring '" not in g2:
+        if re.search(r"^dependencies\s*\{", g2, flags=re.M):
+            g2 = re.sub(r"^(dependencies\s*\{)", lambda mo: mo.group(1) + "\n    " + dep, g2, count=1, flags=re.M)
+        else:
+            g2 = g2.rstrip() + "\n\ndependencies {\n    " + dep + "\n}\n"
+    if g2 != g:
+        with open(gp, "w", encoding="utf-8") as f:
+            f.write(g2)
+        print("core library desugaring enabled in", gradle)
+
 for dens in ("mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi"):
     src = os.path.join(ICONS, f"ic_launcher_{dens}.png")
     dst_dir = os.path.join(RES, f"mipmap-{dens}")
     if os.path.exists(src) and os.path.isdir(dst_dir):
         shutil.copyfile(src, os.path.join(dst_dir, "ic_launcher.png"))
 
-print("Android project patched: permissions, name, cleartext HTTP, minSdk, icons.")
+print("Android project patched: permissions, name, cleartext HTTP, minSdk, desugaring, icons.")
