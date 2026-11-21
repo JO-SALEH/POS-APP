@@ -73,3 +73,13 @@ jobs:
           gh release create latest JO_POS.apk --target "${{ github.sha }}" \
             --title "JO POS - latest build" \
             --notes "Latest APK built from main (${{ github.sha }}). Download JO_POS.apk below and install it on the phone."
+      - name: Publish the test build of this branch as a pre-release (does not touch the "latest" release)
+        if: github.ref == 'refs/heads/feature/po-to-phone'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp build/app/outputs/flutter-apk/app-release.apk JO_POS_with_orders.apk
+          gh release delete po-preview --yes --cleanup-tag || true
+          gh release create po-preview JO_POS_with_orders.apk --prerelease --target "${{ github.sha }}" \
+            --title "JO POS - purchase orders from the PC (test build)" \
+            --notes "Test build of the feature/po-to-phone branch (${{ github.sha }}). Install JO_POS_with_orders.apk."
