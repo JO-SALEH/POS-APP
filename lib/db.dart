@@ -924,6 +924,12 @@ class Db {
         await t.rawUpdate('UPDATE products SET stock=MAX(0, stock-?) WHERE barcode=? AND stock IS NOT NULL',
             [l.baseUnits, l.product.barcode]);
       }
+      // a CREDIT sale raises the customer's balance right away (the PC's own figure replaces it on the next catalog refresh)
+      final c = customer.trim();
+      if (payment == 'Credit' && c.isNotEmpty) {
+        final net = double.parse((subtotal - disc + taxAmt).toStringAsFixed(2));
+        await t.rawUpdate('UPDATE customers SET balance=round(balance+?,2) WHERE lower(name)=lower(?)', [(net - received).clamp(0, 1e12).toDouble(), c]);
+      }
     });
     return receipt;
   }
@@ -1122,6 +1128,10 @@ class Db {
     ];
   }
 
+  /// What a returned amount really is: the lines at the price actually paid.  A sale with a discount / tax refunds the same share of
+  /// them (the PC does exactly this), so the phone and the PC always agree on the refund.
+  static double refundFactor(double subtotal, double net) => subtotal > 0.004 ? net / subtotal : 1.0;
+
   /// Returns [qtyByItem] (sale_item id -> units to take back). Stock is restored. Never more than was sold.
   /// Local record (the desktop receiver takes sales only): shown in the day report and the shift cash.
   static Future<String?> createReturn(int saleId, Map<int, int> qtyByItem, String cashier) async {
@@ -1146,7 +1156,7 @@ class Db {
       for (final e in pick.entries) {
         total += e.key.price * e.value;
       }
-      total = double.parse(total.toStringAsFixed(2));
+      total = double.parse((total * refundFactor((sale['subtotal'] as num).toDouble(), (sale['net_total'] as num).toDouble())).toStringAsFixed(2));
       final rid = await t.insert('returns', {
         'receipt_no': no,
         'sale_id': saleId,
@@ -1172,6 +1182,12 @@ class Db {
           'base_units': per * e.value,
         });
         await t.rawUpdate('UPDATE products SET stock=stock+? WHERE barcode=? AND stock IS NOT NULL', [per * e.value, it.barcode]);
+      }
+      // a CREDIT sale: the refund comes off the customer's account (the PC does the same when the return reaches it; its figure replaces this one
+      // on the next catalog refresh)
+      final cust = '${sale['customer'] ?? ''}'.trim();
+      if ('${sale['payment']}' == 'Credit' && cust.isNotEmpty) {
+        await t.rawUpdate('UPDATE customers SET balance=round(balance-?,2) WHERE lower(name)=lower(?)', [total, cust]);
       }
     });
     return no;
@@ -1287,6 +1303,7 @@ class Db {
         'device_name': device,
         'payment_method': h['payment'],
         'discount': h['discount'],
+        if ('${h['payment']}' == 'Credit') 'received': h['received'], // the part paid at the counter: only the rest is a debt on the PC
         'customer_name': h['customer'],
         'items': [
           for (final i in items) {'barcode': i['barcode'], 'qty': i['qty'], 'unit': i['unit'] ?? 'pack'}

@@ -203,6 +203,8 @@ const Map<String, List<String>> _s = {
   'refund': ['Refund', 'المبلغ المسترد'],
   'sold_returned': ['Sold {0}  ·  returned {1}', 'المباع {0}  ·  المرتجع {1}'],
   'return_done': ['Return saved ({0})', 'تم حفظ المرتجع ({0})'],
+  'return_credit': ['Credit sale: {0} will be deducted from {1}\'s account', 'فاتورة آجلة: سيُخصم {0} من حساب {1}'],
+  'return_done_credit': ['Return saved ({0}) · {1} deducted from {2}\'s account', 'تم حفظ المرتجع ({0}) · خُصم {1} من حساب {2}'],
   'returns_label': ['Returns', 'المرتجعات'],
   'net_sales': ['Net sales', 'صافي المبيعات'],
   'by_payment': ['By payment method', 'حسب طريقة الدفع'],

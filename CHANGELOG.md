@@ -4,6 +4,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versions follow
 
 ## [Unreleased]
 
+## [2.2.1] — 2026-11-22
+
+### Fixed
+- **Returns ignored the invoice discount / tax**: the phone refunded the full line price while the PC refunds what was really paid. The refund (preview, record, shift cash) now uses the same share as the PC.
+- **Credit sales**: a return of a credit sale now says so (the return screen and the confirmation name the customer and the amount deducted from the account) and lowers the customer's balance on the phone right away; a credit sale raises it right away. The PC's figure replaces both on the next refresh.
+- The part a customer paid at the counter of a credit sale (`received`) is now sent to the PC, which used to book the whole invoice as debt. (Needs the matching PC program.)
+
 ## [2.2.0] — 2026-11-22
 
 ### Fixed

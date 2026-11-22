@@ -135,6 +135,7 @@ class _SalesScreenState extends State<SalesScreen> {
           for (final i in items) {
             total += i.price * (qty[i.itemId] ?? 0);
           }
+          total = double.parse((total * Db.refundFactor(s.subtotal, s.net)).toStringAsFixed(2)); // price really paid (after discount / tax)
           return AlertDialog(
             backgroundColor: JC.surface2,
             title: Text('${tr('return_btn')} — ${s.receiptNo}', textDirection: TextDirection.ltr, style: const TextStyle(color: JC.warn, fontSize: 15, fontWeight: FontWeight.bold)),
@@ -163,6 +164,11 @@ class _SalesScreenState extends State<SalesScreen> {
                   ),
                 const Divider(),
                 Text('${tr('refund')}: ${fmtMoney(total)} ${tr('currency')}', style: const TextStyle(color: JC.warn, fontWeight: FontWeight.w900, fontSize: 18)),
+                if (s.payment == 'Credit' && s.customer.trim().isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(tr('return_credit', [fmtMoney(total), s.customer]), textAlign: TextAlign.center, style: const TextStyle(color: JC.gold, fontSize: 12)),
+                  ),
               ]),
             ),
             actions: [
@@ -175,7 +181,14 @@ class _SalesScreenState extends State<SalesScreen> {
     );
     if (ok == true) {
       final no = await Db.createReturn(s.id, qty, app.user);
-      if (mounted && no != null) toast(context, tr('return_done', [no]));
+      if (mounted && no != null) {
+        var refund = 0.0;
+        for (final i in items) {
+          refund += i.price * (qty[i.itemId] ?? 0);
+        }
+        refund = double.parse((refund * Db.refundFactor(s.subtotal, s.net)).toStringAsFixed(2));
+        toast(context, s.payment == 'Credit' && s.customer.trim().isNotEmpty ? tr('return_done_credit', [no, fmtMoney(refund), s.customer]) : tr('return_done', [no]));
+      }
       _load();
     }
   }
