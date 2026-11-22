@@ -4,6 +4,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/); versions follow
 
 ## [Unreleased]
 
+## [2.2.0] — 2026-11-22
+
+### Fixed
+- **A deleted purchase order came back after Refresh.** The PC keeps offering an order for the whole session, so the phone downloaded it again. The phone now remembers deleted (and trimmed) orders on disk and never fetches them again; a delete that happens while a refresh is running is no longer undone by it.
+- Sales with no lines were counted as "unsent" forever, which kept the app from contacting the PC; they are no longer counted.
+- An invoice or return the PC refuses is no longer re-sent every 30 s: automatic rounds stop after 3 refusals (until restart or *Sync now*).
+- The "phone connected" signal is now also sent when there is nothing to push.
+- A customer row without a balance no longer aborts the whole catalog refresh.
+
 ### Added
 - **Purchase orders from the PC.** "Send to mobile" in the PC program's *Purchase orders* page hands a PDF (the selected rows, or the whole order) to the phone while the app is connected. The app downloads it on its next sync round, tells the PC it arrived and shows a notification; tapping it opens the new *Purchase orders from the PC* screen (open / share, save to the phone, delete). Requires the matching PC program (`GET /orders`, `GET /orders/<id>.pdf`, `POST /orders/<id>/ack`).
 - Every request now carries `X-JO-Client: mobile`, so the PC can tell the app is connected.

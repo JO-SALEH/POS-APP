@@ -75,6 +75,10 @@ class Orders {
   static bool screenOpen = false;
   static bool _busy = false;
   static bool _loaded = false;
+  // Ids of orders the user deleted (or that fell out of the kept list).  The PC keeps offering an order for the whole session, so without
+  // this list every refresh would download a deleted order again.  Kept on disk, newest last.
+  static const int _keepGone = 500;
+  static final List<String> _gone = <String>[];
 
   static Future<Directory> _dir() async {
     final base = await getApplicationDocumentsDirectory();
@@ -95,10 +99,36 @@ class Orders {
     await tmp.rename('${d.path}/index.json');
   }
 
+  static Future<void> _saveGone() async {
+    final d = await _dir();
+    final tmp = File('${d.path}/deleted.json.tmp');
+    await tmp.writeAsString(jsonEncode(_gone), flush: true);
+    await tmp.rename('${d.path}/deleted.json');
+  }
+
+  static void _forget(String id) {
+    _gone.remove(id);
+    _gone.add(id);
+    while (_gone.length > _keepGone) {
+      _gone.removeAt(0);
+    }
+  }
+
   /// Reads the list kept on the phone (once).
   static Future<void> load() async {
     if (_loaded) return;
     final d = await _dir();
+    final gf = File('${d.path}/deleted.json');
+    if (await gf.exists()) {
+      try {
+        final j = jsonDecode(await gf.readAsString());
+        if (j is List) {
+          _gone
+            ..clear()
+            ..addAll(j.map((e) => '$e'));
+        }
+      } catch (_) {}
+    }
     final f = File('${d.path}/index.json');
     final rows = <PcOrder>[];
     if (await f.exists()) {
@@ -137,6 +167,8 @@ class Orders {
   }
 
   static Future<void> delete(PcOrder o) async {
+    await load();
+    _forget(o.id); // remembered first, so a refresh that is already running cannot bring it back
     try {
       final f = File(o.file);
       if (await f.exists()) await f.delete();
@@ -144,6 +176,7 @@ class Orders {
     _set(list.value.where((x) => x.id != o.id).toList());
     try {
       await _save();
+      await _saveGone();
     } catch (_) {}
   }
 
@@ -161,8 +194,7 @@ class Orders {
       final remote = j is Map ? j['orders'] : null;
       if (remote is! List || remote.isEmpty) return;
       await load();
-      final have = list.value.map((o) => o.id).toSet();
-      final rows = <PcOrder>[...list.value];
+      final have = list.value.map((o) => o.id).toSet()..addAll(_gone);
       final added = <PcOrder>[];
       for (final x in remote.reversed) {
         // oldest first, so the newest ends up on top
@@ -186,7 +218,14 @@ class Orders {
           prices: x['prices'] == true,
           file: file.path,
         );
-        rows.insert(0, o);
+        if (_gone.contains(id)) {
+          // deleted by the user while this round was downloading it
+          try {
+            await file.delete();
+          } catch (_) {}
+          continue;
+        }
+        _set([o, ...list.value]); // always built from the CURRENT list, so a delete during the round is never undone
         added.add(o);
         have.add(id);
         try {
@@ -194,8 +233,10 @@ class Orders {
         } catch (_) {} // the PDF is safe on the phone; the PC window just keeps saying "waiting"
       }
       if (added.isEmpty) return;
+      final rows = <PcOrder>[...list.value];
       while (rows.length > _keep) {
         final old = rows.removeLast();
+        _forget(old.id); // trimmed orders must not come back either
         try {
           final f = File(old.file);
           if (await f.exists()) await f.delete();
@@ -203,6 +244,9 @@ class Orders {
       }
       _set(rows);
       await _save();
+      try {
+        await _saveGone();
+      } catch (_) {}
       for (final o in added) {
         await Notifier.show(o.id.hashCode & 0x7fffffff, tr('orders_notif_title'), tr('orders_notif_body', [o.title, o.items]));
       }

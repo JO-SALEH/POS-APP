@@ -92,6 +92,10 @@ class Lan {
   static DateTime _lastCatalog = DateTime.fromMillisecondsSinceEpoch(0);
   static DateTime? _lastOk;
   static String? _name;
+  // Invoices / returns the PC refused: the automatic rounds stop re-sending one after _maxAuto refusals (until the app is restarted or
+  // the user taps "Sync now"), instead of hammering the PC every 30 s with something that can never be booked.
+  static const int _maxAuto = 3;
+  static final Map<String, int> _refused = <String, int>{};
   static final _obs = _Lifecycle();
 
   // ------------------------------------------------------------- settings
@@ -178,10 +182,11 @@ class Lan {
 
   // ------------------------------------------------------------ push sales
   /// Sends every unsent invoice. Safe to repeat: the desktop books each invoice id once.
-  static Future<LanPushResult> push({bool rediscover = true}) async {
+  static Future<LanPushResult> push({bool rediscover = true, bool auto = false}) async {
     var p = await load();
     if (p == null) throw LanException(tr('lan_not_paired'));
-    final invoices = await Db.lanInvoices();
+    if (!auto) _refused.clear(); // a manual "Sync now" tries everything again
+    final invoices = await _sendable(await Db.lanInvoices(), auto);
     final res = LanPushResult();
     if (invoices.isEmpty && await Db.unsyncedReturns() == 0) return res;
     try {
@@ -191,12 +196,15 @@ class Lan {
       if (!e.unreachable || !rediscover) rethrow;
       final np = await findDesktop(p);
       if (np == null) rethrow;
-      final again = await Db.lanInvoices();
+      final again = await _sendable(await Db.lanInvoices(), auto);
       if (again.isNotEmpty) await _pushTo(np, again, res); // only what is still unsent
       await _pushReturns(np, res);
     }
     return res;
   }
+
+  static Future<List<Map<String, Object?>>> _sendable(List<Map<String, Object?>> rows, bool auto) async =>
+      auto ? rows.where((i) => (_refused['${i['client_sale_id']}'.split('-').last] ?? 0) < _maxAuto).toList() : rows;
 
   /// Returns of sales the PC already has: it restocks, books the refund and lowers the customer's credit.
   static Future<void> _pushReturns(Pairing p, LanPushResult res) async {
@@ -287,6 +295,7 @@ class Lan {
       res.unmatched++;
     } else {
       final err = '${x['message'] ?? x['error'] ?? 'error'}';
+      _refused.update(receipt, (n) => n + 1, ifAbsent: () => 1);
       await Db.setSyncResult(receipt, synced: false, note: tr('lan_note_failed', [err]));
       res.failed++;
       res.errors.add('$receipt: $err');
@@ -421,9 +430,12 @@ class Lan {
       await _publish(online: status.value.online, busy: true);
       final n = await Db.unsyncedCount() + await Db.unsyncedReturns();
       final canScan = DateTime.now().difference(_lastScan) > const Duration(minutes: 3);
+      var contacted = false;
       if (n > 0) {
-        await push(rediscover: canScan);
-      } else {
+        final r = await push(rediscover: canScan, auto: true);
+        contacted = r.total > 0 || r.returnsSent > 0;
+      }
+      if (!contacted) {
         try {
           _name = await ping(p, timeout: const Duration(seconds: 3));
           _lastOk = DateTime.now();

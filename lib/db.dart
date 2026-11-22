@@ -1011,7 +1011,7 @@ class Db {
       final b = t.batch();
       for (final r in rows) {
         if (r is! List || r.length < 4 || r[0] is! int) continue;
-        b.insert('customers', {'id': r[0], 'name': '${r[1]}', 'phone': '${r[2]}', 'balance': (r[3] as num).toDouble()}, conflictAlgorithm: ConflictAlgorithm.replace);
+        b.insert('customers', {'id': r[0], 'name': '${r[1]}', 'phone': '${r[2]}', 'balance': (r[3] is num ? (r[3] as num).toDouble() : 0.0)}, conflictAlgorithm: ConflictAlgorithm.replace);
       }
       await b.commit(noResult: true);
     });
@@ -1222,7 +1222,7 @@ class Db {
 
   static Future<int> unsyncedCount() async {
     final d = await db;
-    return Sqflite.firstIntValue(await d.rawQuery('SELECT COUNT(*) FROM sales WHERE synced=0')) ?? 0;
+    return Sqflite.firstIntValue(await d.rawQuery('SELECT COUNT(*) FROM sales s WHERE s.synced=0 AND EXISTS (SELECT 1 FROM sale_items i WHERE i.sale_id=s.id)')) ?? 0;
   }
 
   static Future<({int count, double total})> todayStats() async {
